@@ -1,0 +1,179 @@
+{
+  "patterns": {
+    "adding for testing": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "adding for testing again": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "interview call": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "dsa round ": {
+      "count": 2,
+      "cancelled": 0,
+      "rescheduled": 1
+    },
+    "lunch ": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "calling home": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "apply for internships": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "interview": {
+      "count": 226,
+      "cancelled": 0,
+      "rescheduled": 2
+    },
+    "adding task q": {
+      "count": 12,
+      "cancelled": 0,
+      "rescheduled": 1
+    },
+    "interview session": {
+      "count": 11,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "webbinar": {
+      "count": 11,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "eating": {
+      "count": 11,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "sleep": {
+      "count": 42,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "calendar check": {
+      "count": 9,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "breakfast": {
+      "count": 32,
+      "cancelled": 0,
+      "rescheduled": 1
+    },
+    "another breakfast": {
+      "count": 9,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "interview ": {
+      "count": 9,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "call home": {
+      "count": 35,
+      "cancelled": 0,
+      "rescheduled": 1
+    },
+    "workout": {
+      "count": 21,
+      "cancelled": 0,
+      "rescheduled": 1
+    },
+    "dance": {
+      "count": 77,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "swimming": {
+      "count": 73,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "eat": {
+      "count": 73,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "adding ": {
+      "count": 71,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "interview important": {
+      "count": 31,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "call": {
+      "count": 54,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "interciew": {
+      "count": 23,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "appointment doctor": {
+      "count": 23,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "test": {
+      "count": 23,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "final assestment": {
+      "count": 23,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "ance": {
+      "count": 23,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "interview 2": {
+      "count": 13,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "finish project": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "deploy it to prod ": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "dsa": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "interview prep": {
+      "count": 1,
+      "cancelled": 0,
+      "rescheduled": 0
+    }
+  }
+}
