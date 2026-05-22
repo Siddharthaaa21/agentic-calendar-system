@@ -241,6 +241,7 @@ def call_execute(actions):
     except Exception as e:
         st.warning(f"Execute failed: {e}")
         return {}
+    
 
 def call_approve():
     try:
@@ -248,7 +249,26 @@ def call_approve():
     except Exception as e:
         st.warning(f"Approve failed: {e}")
         return {}
+def ask_agent(prompt):
+    try:
+        r = requests.post(
+            f"{API_URL}/chat",
+            json={"message": prompt},
+            timeout=20
+        )
 
+        r.raise_for_status()
+
+        return r.json()
+
+    except Exception as e:
+        return {
+            "reply": f"Agent error: {str(e)}"
+        }
+
+# ─────────────────────────────────────────
+#  SESSION STATE
+# ─────────────────────────────────────────
 # ─────────────────────────────────────────
 #  SESSION STATE
 # ─────────────────────────────────────────
@@ -257,22 +277,35 @@ defaults = {
         "role": "assistant",
         "content": (
             "Hi — I'm **Axon**, your AI calendar agent.\n\n"
-            "Click **Refresh** on the right to load your schedule, "
-            "or ask me anything about your calendar."
+            "I can analyze your schedule, detect conflicts, "
+            "suggest optimizations, and help reschedule meetings intelligently.\n\n"
+            "Try asking:\n"
+            "- 'How busy is my day?'\n"
+            "- 'What should I move?'\n"
+            "- 'Suggest better focus slots'\n"
+            "- 'Reschedule my low priority meetings'"
         ),
     }],
-    "data":     None,
-    "error":    None,
+    "data": None,
+    "error": None,
     "approved": set(),
     "rejected": set(),
 }
+
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ─────────────────────────────────────────
-#  HEADER
-# ─────────────────────────────────────────
+# Auto-load calendar once
+if st.session_state.data is None:
+    with st.spinner("Connecting to Google Calendar..."):
+        result, err = fetch_schedule()
+
+    if err:
+        st.session_state.error = err
+    else:
+        st.session_state.data = result
+
 connected   = st.session_state.data is not None
 dot_cls     = "hdr-dot" if connected else "hdr-dot offline"
 status_text = "Connected to Google Calendar" if connected else "Not connected"
@@ -305,62 +338,25 @@ with left:
         with st.chat_message(msg["role"], avatar="🤖" if msg["role"] == "assistant" else "👤"):
             st.markdown(msg["content"])
 
+    # if prompt := st.chat_input("Message Axon…"):
+        # 
     if prompt := st.chat_input("Message Axon…"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        lower = prompt.lower()
+        st.session_state.messages.append({
+            "role": "user",
+            "content": prompt
+        })
+        with st.spinner("Axon is reasoning..."):
+            response = ask_agent(prompt)
 
-        if any(k in lower for k in ["refresh", "load", "fetch", "today", "schedule"]):
-            with st.spinner("Fetching from API…"):
-                result, err = fetch_schedule()
-            if err:
-                st.session_state.error = err
-                reply = f"Couldn't load schedule — {err}"
-            else:
-                st.session_state.data     = result
-                st.session_state.error    = None
-                st.session_state.approved = set()
-                st.session_state.rejected = set()
-                n_events    = len(result.get("events", []))
-                n_conflicts = len(result.get("conflicts", []))
-                reply = (
-                    f"Loaded **{n_events} events** for today. "
-                    + (f"**{n_conflicts} conflict(s)** detected — actions queued on the right." if n_conflicts
-                       else "No conflicts found.")
-                )
+        reply = response.get("reply", "No response from agent.")
 
-        elif any(k in lower for k in ["approve", "apply", "execute", "yes all"]):
-            if not data:
-                reply = "No schedule loaded yet. Ask me to refresh first."
-            else:
-                call_approve()
-                for a in data.get("actions", []):
-                    st.session_state.approved.add(a["id"])
-                reply = "✓ All actions pushed to Google Calendar."
+        if "data" in response:
+            st.session_state.data = response["data"]
 
-        elif any(k in lower for k in ["conflict", "overlap"]):
-            if not data:
-                reply = "No schedule loaded yet. Ask me to refresh first."
-            else:
-                c_list = data.get("conflicts", [])
-                if not c_list:
-                    reply = "No conflicts detected in the current schedule."
-                else:
-                    lines = "\n".join(f"{i+1}. **{c['title']}** — {c.get('detail','')}" for i, c in enumerate(c_list))
-                    reply = f"Found {len(c_list)} conflict(s):\n\n{lines}"
-
-        elif any(k in lower for k in ["free", "slot", "gap", "available"]):
-            if not data:
-                reply = "No schedule loaded yet. Ask me to refresh first."
-            else:
-                reply = "Checking free slots from your loaded schedule — see the timeline on the right."
-
-        elif any(k in lower for k in ["reschedule", "move"]):
-            reply = "Which event and what time? I'll queue the reschedule action for your approval."
-
-        else:
-            reply = "On it ...."
-
-        st.session_state.messages.append({"role": "assistant", "content": reply})
+        st.session_state.messages.append({
+            "role": "assistant",
+            "content": reply
+        })
         st.rerun()
 
     st.markdown('</div>', unsafe_allow_html=True)
@@ -481,93 +477,96 @@ with right:
             </div>
             """, unsafe_allow_html=True)
 
-        # Conflicts
-        if conflicts:
-            cfl_html = ""
-            for c in conflicts:
-                cls = "cfl warn" if c.get("warn") else "cfl"
-                cfl_html += f"""
-                <div class="{cls}">
-                    <div>
-                        <div class="cfl-body">{c['title']}</div>
-                        <div class="cfl-sub">{c.get('detail', '')}</div>
-                    </div>
-                </div>"""
+    # Conflicts
+    conflicts = data.get("conflicts", [])
+    if conflicts:
+        cfl_html = ""
+        for c in conflicts:
+            cls = "cfl warn" if c.get("warn") else "cfl"
+            cfl_html += f"""
+            <div class="{cls}">
+                <div>
+                    <div class="cfl-body">{c['title']}</div>
+                    <div class="cfl-sub">{c.get('detail', '')}</div>
+                </div>
+            </div>"""
+        st.markdown(f"""
+        <div class="card">
+            <div class="card-label">Conflicts</div>
+            {cfl_html}
+        </div>
+        """, unsafe_allow_html=True)
+
+
+
+    # Actions
+    icon_map = {"RESCHEDULE": "↗", "REBALANCE": "⇄", "CANCEL": "×", "CREATE": "+"}
+
+    if pending:
+        for a in pending:
+            aid  = a["id"]
+            icon = icon_map.get(a["action"], "→")
             st.markdown(f"""
-            <div class="card">
-                <div class="card-label">Conflicts</div>
-                {cfl_html}
+            <div class="act">
+                <div class="act-type">{icon} {a['action']}</div>
+                <div class="act-desc"><strong>{a['title']}</strong> — {a.get('detail', '')}</div>
             </div>
             """, unsafe_allow_html=True)
 
-        # Actions
-        icon_map = {"RESCHEDULE": "↗", "REBALANCE": "⇄", "CANCEL": "×", "CREATE": "+"}
+            needs_edit = a["action"] in ("RESCHEDULE", "REBALANCE")
+            cols = st.columns([1, 1, 1] if needs_edit else [1, 1, 2])
 
-        if pending:
-            for a in pending:
-                aid  = a["id"]
-                icon = icon_map.get(a["action"], "→")
-                st.markdown(f"""
-                <div class="act">
-                    <div class="act-type">{icon} {a['action']}</div>
-                    <div class="act-desc"><strong>{a['title']}</strong> — {a.get('detail', '')}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-                needs_edit = a["action"] in ("RESCHEDULE", "REBALANCE")
-                cols = st.columns([1, 1, 1] if needs_edit else [1, 1, 2])
-
-                with cols[0]:
-                    st.markdown('<div class="btn-approve">', unsafe_allow_html=True)
-                    if st.button("Approve", key=f"ap_{aid}"):
-                        call_execute([a])
-                        st.session_state.approved.add(aid)
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": f"✓ **{a['title']}** pushed to Google Calendar.",
-                        })
-                        st.rerun()
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                with cols[1]:
-                    st.markdown('<div class="btn-reject">', unsafe_allow_html=True)
-                    if st.button("Reject", key=f"rj_{aid}"):
-                        st.session_state.rejected.add(aid)
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": f"Dismissed — **{a['title']}** left unchanged.",
-                        })
-                        st.rerun()
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-                if needs_edit:
-                    with cols[2]:
-                        st.markdown('<div class="btn-edit">', unsafe_allow_html=True)
-                        if st.button("Edit time", key=f"ed_{aid}"):
-                            st.session_state.messages.append({
-                                "role": "assistant",
-                                "content": f"What time should I move **{a['title']}** to?",
-                            })
-                            st.rerun()
-                        st.markdown('</div>', unsafe_allow_html=True)
-
-                st.markdown('<div style="height:2px;"></div>', unsafe_allow_html=True)
-
-            if len(pending) > 1:
-                st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
-                st.markdown('<div class="btn-all">', unsafe_allow_html=True)
-                if st.button("Approve all", key="all"):
-                    call_approve()
-                    for a in pending:
-                        st.session_state.approved.add(a["id"])
+            with cols[0]:
+                st.markdown('<div class="btn-approve">', unsafe_allow_html=True)
+                if st.button("Approve", key=f"ap_{aid}"):
+                    call_execute([a])
+                    st.session_state.approved.add(aid)
                     st.session_state.messages.append({
                         "role": "assistant",
-                        "content": f"✓ All {len(pending)} actions applied to Google Calendar.",
+                        "content": f"✓ **{a['title']}** pushed to Google Calendar.",
                     })
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        elif actions:
-            st.success("All actions resolved")
+            with cols[1]:
+                st.markdown('<div class="btn-reject">', unsafe_allow_html=True)
+                if st.button("Reject", key=f"rj_{aid}"):
+                    st.session_state.rejected.add(aid)
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"Dismissed — **{a['title']}** left unchanged.",
+                    })
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
+            if needs_edit:
+                with cols[2]:
+                    st.markdown('<div class="btn-edit">', unsafe_allow_html=True)
+                    if st.button("Edit time", key=f"ed_{aid}"):
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"What time should I move **{a['title']}** to?",
+                        })
+                        st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+            st.markdown('<div style="height:2px;"></div>', unsafe_allow_html=True)
+
+        if len(pending) > 1:
+            st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
+            st.markdown('<div class="btn-all">', unsafe_allow_html=True)
+            if st.button("Approve all", key="all"):
+                call_approve()
+                for a in pending:
+                    st.session_state.approved.add(a["id"])
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": f"✓ All {len(pending)} actions applied to Google Calendar.",
+                })
+                st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    elif actions:
+        st.success("All actions resolved")
+
+st.markdown('</div>', unsafe_allow_html=True)

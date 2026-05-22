@@ -9,6 +9,7 @@ from app.core.llm import call_llm
 # =====================================================
 
 TIME_REGEX = r'(\d{1,2}(?::\d{2})?\s?(?:am|pm))'
+BARE_HOUR_REGEX = r'\b(?:after|at|around|then)\s*(\d{1,2})(?::(\d{2}))?\b'
 
 
 def extract_rule_entities(message: str):
@@ -26,12 +27,28 @@ def extract_rule_entities(message: str):
     if time_match:
 
         entities["time"] = time_match.group(1)
+    else:
+        bare_match = re.search(BARE_HOUR_REGEX, msg)
+        if bare_match:
+            hour = int(bare_match.group(1))
+            minute = bare_match.group(2)
+
+            inferred_period = "pm" if 1 <= hour <= 11 else "am"
+            if hour == 12:
+                inferred_period = "pm"
+
+            if minute:
+                entities["time"] = f"{hour}:{minute} {inferred_period}"
+            else:
+                entities["time"] = f"{hour} {inferred_period}"
 
     # -----------------------------------------
     # EVENT TITLE
     # -----------------------------------------
 
     trigger_words = [
+        "add",
+        "create",
         "move",
         "reschedule",
         "shift",
@@ -55,7 +72,12 @@ def extract_rule_entities(message: str):
             stop_words = [
                 "to",
                 "at",
-                "on"
+                "on",
+                "after",
+                "before",
+                "from",
+                "by",
+                "in"
             ]
 
             for w in remaining:

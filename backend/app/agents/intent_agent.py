@@ -1,13 +1,37 @@
 # app/agents/intent_agent.py
 
+import re
+
 from app.core.llm import call_llm
 
 
 RULE_INTENTS = {
 
+    "CREATE_EVENT": [
+        "add",
+        "create",
+    ],
+
+    "RESCHEDULE_EVENT": [
+        "reschedule",
+        "move",
+        "shift",
+        "replace"
+    ],
+
+    "DELETE_EVENT": [
+        "delete",
+        "remove",
+        "cancel"
+    ],
+
     "GET_TODAY": [
         "today",
         "schedule",
+        "tasks",
+        "all tasks",
+        "todays tasks",
+        "today's tasks",
         "what's today",
         "plans today"
     ],
@@ -24,19 +48,9 @@ RULE_INTENTS = {
         "gap"
     ],
 
-    "RESCHEDULE_EVENT": [
-        "move",
-        "reschedule",
-        "shift"
-    ],
-
-    "DELETE_EVENT": [
-        "delete",
-        "remove",
-        "cancel"
-    ],
-
     "OPTIMIZE_DAY": [
+        "suggestion",
+        "suggest",
         "optimize",
         "improve",
         "packed",
@@ -58,6 +72,7 @@ RULE_INTENTS = {
 
 VALID_INTENTS = {
 
+    "CREATE_EVENT",
     "GET_TODAY",
     "SHOW_CONFLICTS",
     "GET_FREE_SLOTS",
@@ -70,9 +85,33 @@ VALID_INTENTS = {
 }
 
 
+def _contains_phrase(msg: str, phrase: str):
+    phrase_pattern = re.escape(phrase).replace(r"\ ", r"\s+")
+    pattern = rf"\b{phrase_pattern}\b"
+    return re.search(pattern, msg) is not None
+
+
 def detect_rule_intent(message: str):
 
     msg = message.lower().strip()
+
+    if (
+        "best possible" in msg
+        or "best way" in msg
+        or "optimize" in msg
+        or "schedule every task" in msg
+    ):
+        return {"intent": "OPTIMIZE_DAY", "source": "RULE"}
+
+    # explicit scheduling verbs should map to action intents first
+    if msg.startswith("reschedule ") or msg.startswith("move ") or msg.startswith("shift "):
+        return {"intent": "RESCHEDULE_EVENT", "source": "RULE"}
+
+    if msg.startswith("add ") or msg.startswith("create "):
+        return {"intent": "CREATE_EVENT", "source": "RULE"}
+
+    if msg.startswith("delete ") or msg.startswith("remove "):
+        return {"intent": "DELETE_EVENT", "source": "RULE"}
 
     for intent, phrases in RULE_INTENTS.items():
 
@@ -90,7 +129,7 @@ def detect_rule_intent(message: str):
 
             else:
 
-                if phrase in msg:
+                if _contains_phrase(msg, phrase):
 
                     return {
                         "intent": intent,
@@ -107,6 +146,7 @@ You are an intent classifier.
 
 Return ONLY one intent from this list:
 
+CREATE_EVENT
 GET_TODAY
 SHOW_CONFLICTS
 GET_FREE_SLOTS

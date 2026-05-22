@@ -139,3 +139,32 @@ def reschedule_event(event_id: str, new_start: str, new_end: str):
             "event_id": event_id,
             "error": str(e)
         }
+
+
+def create_event(title: str, start_time: str, end_time: str, description: str = ""):
+    try:
+        service = get_service()
+
+        created = service.events().insert(
+            calendarId="primary",
+            body={
+                "summary": title,
+                "description": description,
+                "start": {
+                    "dateTime": start_time,
+                    "timeZone": "UTC",
+                },
+                "end": {
+                    "dateTime": end_time,
+                    "timeZone": "UTC",
+                },
+            },
+        ).execute()
+
+        return normalize_event(created)
+    except Exception as e:
+        return {
+            "status": "FAILED",
+            "error": str(e),
+            "title": title,
+        }

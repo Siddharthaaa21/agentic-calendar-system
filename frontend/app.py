@@ -249,11 +249,12 @@ def call_approve():
     except Exception as e:
         st.warning(f"Approve failed: {e}")
         return {}
-def ask_agent(prompt):
+def ask_agent(prompt, history=None):
     try:
+        history = history or []
         r = requests.post(
             f"{API_URL}/chat",
-            json={"message": prompt},
+            json={"message": prompt, "history": history},
             timeout=20
         )
 
@@ -266,9 +267,6 @@ def ask_agent(prompt):
             "reply": f"Agent error: {str(e)}"
         }
 
-# ─────────────────────────────────────────
-#  SESSION STATE
-# ─────────────────────────────────────────
 # ─────────────────────────────────────────
 #  SESSION STATE
 # ─────────────────────────────────────────
@@ -305,9 +303,7 @@ if st.session_state.data is None:
         st.session_state.error = err
     else:
         st.session_state.data = result
-# ─────────────────────────────────────────
-#  HEADER
-# ─────────────────────────────────────────
+
 connected   = st.session_state.data is not None
 dot_cls     = "hdr-dot" if connected else "hdr-dot offline"
 status_text = "Connected to Google Calendar" if connected else "Not connected"
@@ -334,35 +330,55 @@ data = st.session_state.data  # may be None until user refreshes
 #  LEFT — CHAT
 # ══════════════════════════════
 with left:
-    st.markdown('<div style="padding:16px 20px 0;">', unsafe_allow_html=True)
 
     for msg in st.session_state.messages:
-        with st.chat_message(msg["role"], avatar="🤖" if msg["role"] == "assistant" else "👤"):
+        with st.chat_message(
+            msg["role"],
+            avatar="🤖" if msg["role"] == "assistant" else "👤"
+        ):
             st.markdown(msg["content"])
 
-    # if prompt := st.chat_input("Message Axon…"):
-        # 
     if prompt := st.chat_input("Message Axon…"):
+
         st.session_state.messages.append({
             "role": "user",
             "content": prompt
         })
+
         with st.spinner("Axon is reasoning..."):
-            response = ask_agent(prompt)
+            response = ask_agent(prompt, history=st.session_state.messages)
 
-        reply = response.get("reply", "No response from agent.")
+        reply = response.get(
+            "reply",
+            "No response from agent."
+        )
 
-        if "data" in response:
+        if response.get("requires_confirmation"):
+            reply += "\n\nPlease review and approve from the action panel."
+
+        suggestions = response.get("suggestions", [])
+        if suggestions:
+            reply += "\n\nTry next:\n" + "\n".join([f"- {item}" for item in suggestions[:3]])
+
+        if "data" in response and response["data"]:
             st.session_state.data = response["data"]
+        else:
+            current_data = st.session_state.data or {}
+            merged = {
+                "events": response.get("events", current_data.get("events", [])),
+                "conflicts": response.get("conflicts", current_data.get("conflicts", [])),
+                "actions": response.get("actions", current_data.get("actions", [])),
+                "load_pct": response.get("load_pct", current_data.get("load_pct", 0)),
+                "suggestions": response.get("suggestions", current_data.get("suggestions", [])),
+            }
+            st.session_state.data = merged
 
         st.session_state.messages.append({
             "role": "assistant",
             "content": reply
         })
+
         st.rerun()
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
 # ══════════════════════════════
 #  RIGHT — DASHBOARD
 # ══════════════════════════════
@@ -480,6 +496,7 @@ with right:
             """, unsafe_allow_html=True)
 
     # Conflicts
+    conflicts = data.get("conflicts", [])
     if conflicts:
         cfl_html = ""
         for c in conflicts:
@@ -498,52 +515,7 @@ with right:
         </div>
         """, unsafe_allow_html=True)
 
-    # Suggestions
-    # suggestions = data.get("suggestions", [])
-    # if isinstance(suggestions, str):
-    #     suggestions = [{
-    #     "title": suggestions,
-    #     "reason": "",
-    #     "new_time": ""
-    # }]
 
-    # if suggestions:
-    #     sug_html = ""
-    #     for s in suggestions:
-    #         if isinstance(s, str):
-
-    #             title = s
-    #             reason = ""
-    #             new_time = ""
-
-    #         else:
-
-    #             title = s.get("title", "Suggestion")
-    #             reason = s.get("reason", "")
-    #             new_time = s.get("new_time", "")
-
-    #         sug_html += f"""
-    #         <div class="act">
-    #             <div class="act-type">AI Suggestion</div>
-
-    #             <div class="act-desc">
-    #                 <strong>{title}</strong><br><br>
-
-    #                 {reason}<br><br>
-
-    #                 <span style="color:#10b981;">
-    #                     {new_time}
-    #                 </span>
-    #             </div>
-    #         </div>
-    #         """
-
-    #     st.markdown(f"""
-    #     <div class="card">
-    #         <div class="card-label">Suggestions</div>
-    #         {sug_html}
-    #     </div>
-    #     """, unsafe_allow_html=True)
 
     # Actions
     icon_map = {"RESCHEDULE": "↗", "REBALANCE": "⇄", "CANCEL": "×", "CREATE": "+"}
@@ -566,11 +538,25 @@ with right:
                 st.markdown('<div class="btn-approve">', unsafe_allow_html=True)
                 if st.button("Approve", key=f"ap_{aid}"):
                     call_execute([a])
-                    st.session_state.approved.add(aid)
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": f"✓ **{a['title']}** pushed to Google Calendar.",
-                    })
+                    approve_result = call_approve()
+                    results = approve_result.get("results", [])
+                    failed = [item for item in results if item.get("status") == "FAILED"]
+
+                    if failed:
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"I couldn't apply **{a['title']}**: {failed[0].get('error', 'unknown error')}",
+                        })
+                    else:
+                        st.session_state.approved.add(aid)
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"✓ **{a['title']}** pushed to Google Calendar.",
+                        })
+
+                    refreshed, err = fetch_schedule()
+                    if not err and refreshed:
+                        st.session_state.data = refreshed
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
@@ -602,13 +588,27 @@ with right:
             st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
             st.markdown('<div class="btn-all">', unsafe_allow_html=True)
             if st.button("Approve all", key="all"):
-                call_approve()
-                for a in pending:
-                    st.session_state.approved.add(a["id"])
-                st.session_state.messages.append({
-                    "role": "assistant",
-                    "content": f"✓ All {len(pending)} actions applied to Google Calendar.",
-                })
+                call_execute(pending)
+                approve_result = call_approve()
+                results = approve_result.get("results", [])
+                failed = [item for item in results if item.get("status") == "FAILED"]
+
+                if failed:
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"Applied some changes, but {len(failed)} action(s) failed."
+                    })
+                else:
+                    for a in pending:
+                        st.session_state.approved.add(a["id"])
+                    st.session_state.messages.append({
+                        "role": "assistant",
+                        "content": f"✓ All {len(pending)} actions applied to Google Calendar.",
+                    })
+
+                refreshed, err = fetch_schedule()
+                if not err and refreshed:
+                    st.session_state.data = refreshed
                 st.rerun()
             st.markdown('</div>', unsafe_allow_html=True)
 

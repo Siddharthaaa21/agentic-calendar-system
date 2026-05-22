@@ -1,6 +1,7 @@
 from app.services.calendar_service import (
     cancel_event,
-    reschedule_event
+    reschedule_event,
+    create_event,
 )
 
 from datetime import datetime, timedelta
@@ -22,10 +23,16 @@ def convert_time_to_iso(time_str):
         .upper()
     )
 
-    parsed = datetime.strptime(
-        cleaned,
-        "%I%p"
-    )
+    parsed = None
+    for pattern in ["%I:%M%p", "%I%p", "%H:%M"]:
+        try:
+            parsed = datetime.strptime(cleaned, pattern)
+            break
+        except ValueError:
+            continue
+
+    if parsed is None:
+        raise ValueError(f"Unsupported time format: {time_str}")
 
     final_dt = datetime.combine(
         today,
@@ -95,14 +102,13 @@ def execute_actions(actions):
 
             if action_type == "delete":
 
-                event_title = action.get(
-                    "event_title"
-                )
+                event_title = action.get("event_title") or action.get("title")
 
-                event = find_event_by_title(
-                    events,
-                    event_title
-                )
+                event = None
+                if action.get("event_id"):
+                    event = next((item for item in events if item.get("id") == action.get("event_id")), None)
+                if not event and event_title:
+                    event = find_event_by_title(events, event_title)
 
                 if not event:
                     raise Exception(
@@ -126,9 +132,7 @@ def execute_actions(actions):
 
             elif action_type == "reschedule":
 
-                event_title = action.get(
-                    "event_title"
-                )
+                event_title = action.get("event_title") or action.get("title")
 
                 new_time = action.get(
                     "new_time"
@@ -139,10 +143,11 @@ def execute_actions(actions):
                         "Missing new_time"
                     )
 
-                event = find_event_by_title(
-                    events,
-                    event_title
-                )
+                event = None
+                if action.get("event_id"):
+                    event = next((item for item in events if item.get("id") == action.get("event_id")), None)
+                if not event and event_title:
+                    event = find_event_by_title(events, event_title)
 
                 if not event:
                     raise Exception(
@@ -191,6 +196,38 @@ def execute_actions(actions):
                     "event": event_title,
                     "new_start": new_start,
                     "new_end": new_end,
+                    "response": response
+                })
+
+            # ===================================================
+            # CREATE EVENT
+            # ===================================================
+
+            elif action_type in {"create", "create_event"}:
+
+                event_title = action.get("event_title") or action.get("title") or "New Event"
+                start_time = action.get("start")
+                end_time = action.get("end")
+
+                if (not start_time or not end_time) and action.get("new_time"):
+                    start_time = convert_time_to_iso(action.get("new_time"))
+                    start_dt = datetime.fromisoformat(start_time.replace("Z", ""))
+                    end_time = (start_dt + timedelta(hours=1)).isoformat() + "Z"
+
+                if not start_time or not end_time:
+                    raise Exception("Missing start/end for create action")
+
+                response = create_event(
+                    title=event_title,
+                    start_time=start_time,
+                    end_time=end_time,
+                    description=action.get("detail", "")
+                )
+
+                results.append({
+                    "status": "EXECUTED",
+                    "action": "CREATE",
+                    "event": event_title,
                     "response": response
                 })
 

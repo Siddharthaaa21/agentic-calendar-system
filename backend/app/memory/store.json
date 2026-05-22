@@ -36,7 +36,7 @@
       "rescheduled": 0
     },
     "interview": {
-      "count": 226,
+      "count": 250,
       "cancelled": 0,
       "rescheduled": 2
     },
@@ -156,12 +156,12 @@
       "rescheduled": 0
     },
     "finish project": {
-      "count": 1,
+      "count": 25,
       "cancelled": 0,
       "rescheduled": 0
     },
     "deploy it to prod ": {
-      "count": 1,
+      "count": 25,
       "cancelled": 0,
       "rescheduled": 0
     },
@@ -171,7 +171,22 @@
       "rescheduled": 0
     },
     "interview prep": {
-      "count": 1,
+      "count": 25,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "new match": {
+      "count": 10,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "checking": {
+      "count": 10,
+      "cancelled": 0,
+      "rescheduled": 0
+    },
+    "a task named prep dsa": {
+      "count": 2,
       "cancelled": 0,
       "rescheduled": 0
     }

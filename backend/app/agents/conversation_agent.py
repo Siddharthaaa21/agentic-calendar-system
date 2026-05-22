@@ -1,6 +1,6 @@
 # app/agents/conversation_agent.py
 
-from app.agents.intend_agent import detect_intent
+from app.agents.intent_agent import detect_intent
 from app.agents.entity_agent import extract_entities
 
 from app.memory.short_term import get_session, save_session

@@ -1,4 +1,4 @@
-from app.agents.intend_agent import detect_intent
+from app.agents.intent_agent import detect_intent
 
 
 tests = [
