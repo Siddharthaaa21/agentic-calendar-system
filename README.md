@@ -59,11 +59,7 @@ The images will be saved to `docs/graphs/architecture.png` and `docs/graphs/regr
 - Short-term session memory is file-backed; consider migrating to Redis for multi-instance deployments.
 - The repository currently targets Python 3.9 in `venv39`; Google libraries warn about 3.9 EOL — consider upgrading to 3.10+ and adjusting `requirements.txt`.
 
-**CI suggestion**
-- Add a GitHub Actions workflow to run `backend/app/testing/testing_chat_regression.py` on PRs to prevent regressions.
 
-**License & Credits**
-- (Add license if desired)
 
 ---
 
