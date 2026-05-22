@@ -41,7 +41,6 @@ cd backend
 python -m app.testing.testing_chat_regression
 ```
 
-Expected output: `Regression result: 6/6 passed` (may print non-blocking Python deprecation warnings).
 
 **Generate README Graphs**
 
