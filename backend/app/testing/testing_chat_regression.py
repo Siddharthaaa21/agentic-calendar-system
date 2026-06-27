@@ -50,8 +50,13 @@ def patch_workflow_dependencies():
         return fake_session
 
     def fake_save_session(payload):
+        # Snapshot first: callers sometimes pass the live session dict back in
+        # (save_session(get_session())), so clearing before copying would wipe
+        # it. The real file-backed save_session round-trips through JSON and
+        # never aliases like this.
+        snapshot = dict(payload)
         fake_session.clear()
-        fake_session.update(payload)
+        fake_session.update(snapshot)
 
     def fake_execute_actions(actions):
         return [{"status": "EXECUTED", "action": action.get("action")} for action in actions]
@@ -144,6 +149,30 @@ def run_regression_suite():
             r6.get("intent") == "REJECT_ACTIONS" and "discarded" in r6.get("reply", "").lower(),
             "no -> rejects pending actions",
             r6,
+        )
+    )
+
+    # Multi-turn create must survive all the way through approval. The chat
+    # fast-path builds the CREATE action and says "Approve when you're ready";
+    # if that action isn't persisted to pending_actions, the follow-up "yes"
+    # finds nothing pending. Regression guard for that exact bug.
+    reset_state()
+    wf.run_agentic_workflow("add yoga", conversation_history=[])
+    r7 = wf.run_agentic_workflow("8am", conversation_history=[])
+    passes.append(
+        check(
+            r7.get("intent") == "CREATE_EVENT" and len(r7.get("actions", [])) == 1,
+            "add yoga -> 8am -> pending CREATE action",
+            r7,
+        )
+    )
+    r8 = wf.run_agentic_workflow("yes", conversation_history=[])
+    passes.append(
+        check(
+            r8.get("intent") == "APPROVE_ACTIONS"
+            and "applied" in r8.get("reply", "").lower(),
+            "yes -> applies the pending multi-turn CREATE (not 'nothing pending')",
+            r8,
         )
     )
 

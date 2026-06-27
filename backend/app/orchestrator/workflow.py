@@ -28,6 +28,21 @@ def _normalize_response(payload: dict, intent: str) -> dict:
     }
 
 
+def _persist_pending(response: dict) -> dict:
+    """Persist any actions on an early-return response to session pending_actions.
+
+    The multi-turn fast paths (create/reschedule/slot-fill follow-ups) return
+    before the normal route_intent path that saves pending_actions, so without
+    this the user is told "Approve when you're ready" but a later "yes" finds
+    nothing pending. Centralizing here keeps every approval path working.
+    """
+    if response.get("actions"):
+        session = get_session()
+        session["pending_actions"] = response["actions"]
+        save_session(session)
+    return response
+
+
 def run_agentic_workflow(message: str, conversation_history: list = None) -> dict:
     append_turn("user", message)
     conversation_history = conversation_history or get_recent_turns(limit=8)
@@ -110,6 +125,7 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
                     "reply": f"Got it. What time should I schedule **{candidate_clean}**?",
                     "intent": "CREATE_EVENT",
                 }, "CREATE_EVENT")
+            _persist_pending(response)
             append_turn("assistant", response["reply"])
             return response
 
@@ -138,6 +154,7 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
                 "detail": f"Create event at {t}",
             }],
         }, "CREATE_EVENT")
+        _persist_pending(response)
         append_turn("assistant", response["reply"])
         return response
 
@@ -168,6 +185,7 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
             "intent": "RESCHEDULE_EVENT",
             "actions": [action],
         }, "RESCHEDULE_EVENT")
+        _persist_pending(response)
         append_turn("assistant", response["reply"])
         return response
 
@@ -231,6 +249,7 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
                     "intent": "CREATE_EVENT",
                 }, "CREATE_EVENT")
                 save_memory("awaiting_event_title", True)
+            _persist_pending(response)
             append_turn("assistant", response["reply"])
             return response
 
