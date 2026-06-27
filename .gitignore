@@ -24,6 +24,12 @@ token.json
 secrets.json
 
 # =====================================================
+# RUNTIME STATE (regenerated at runtime, per-deployment)
+# =====================================================
+backend/app/memory/session_store.json
+backend/app/memory/store.json
+
+# =====================================================
 # SESSION / MEMORY / CACHE
 # =====================================================
 session.json

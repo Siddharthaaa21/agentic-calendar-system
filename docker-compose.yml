@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - DEMO_MODE=${DEMO_MODE:-true}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
+    # If running with DEMO_MODE=false, also mount your Google OAuth files:
+    #   volumes:
+    #     - ./backend/credentials.json:/app/credentials.json:ro
+    #     - ./backend/token.json:/app/token.json
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://backend:8000
+    depends_on:
+      - backend

@@ -15,8 +15,10 @@ def format_schedule_summary(context):
     )
 
     if context["conflicts"]:
+        n = len(context["conflicts"])
+        noun = "conflict" if n == 1 else "conflicts"
         lines.append(
-            f"You currently have {len(context['conflicts'])} scheduling conflicts."
+            f"You currently have {n} scheduling {noun}."
         )
 
     lines.append("")
@@ -26,7 +28,7 @@ def format_schedule_summary(context):
     for e in events[:4]:
 
         lines.append(
-            f"• {e['title']} — {pretty_time(e['start'])}"
+            f"- **{e['title']}** — {pretty_time(e['start'])}"
         )
 
     if context["free_slot"]:
@@ -35,7 +37,7 @@ def format_schedule_summary(context):
 
         lines.append("")
         lines.append(
-            f"Best available focus slot: {start} to {end}"
+            f"Best available focus slot: {pretty_time(start)} to {pretty_time(end)}"
         )
 
     return "\n".join(lines)
@@ -45,6 +47,11 @@ def style_reply(reply, context, intent="UNKNOWN"):
     prefs = context.get("conversation_prefs", {})
     history = context.get("conversation_history", [])
     turn_index = len(history)
+    last_user = ""
+    for turn in reversed(history):
+        if turn.get("role") == "user":
+            last_user = (turn.get("content") or "").strip().lower()
+            break
 
     openings_map = {
         "GET_TODAY": [
@@ -67,6 +74,11 @@ def style_reply(reply, context, intent="UNKNOWN"):
             "Here’s what’s colliding in your schedule.",
             "I spotted these conflicts.",
         ],
+        "WHY_EXPLAIN": [
+            "Great question.",
+            "Totally fair to ask.",
+            "Here’s the reasoning behind it.",
+        ],
         "UNKNOWN": [
             "I’m with you.",
             "Got it.",
@@ -81,6 +93,22 @@ def style_reply(reply, context, intent="UNKNOWN"):
         body = reply.split("\n\n")[0]
     else:
         body = reply
+
+    if body.strip().lower().startswith(("hey", "hi", "hello")):
+        return body
+
+    follow_up_cues = (
+        "why",
+        "how",
+        "can we",
+        "could we",
+        "what if",
+        "then",
+        "ok",
+        "okay",
+    )
+    if last_user and any(last_user.startswith(cue) for cue in follow_up_cues):
+        opening = "Got you."
 
     if body.lower().startswith(opening.lower()):
         return body

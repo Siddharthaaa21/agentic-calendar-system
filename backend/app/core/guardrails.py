@@ -1,101 +1,39 @@
-import json
-
-MAX_EVENTS = 10
-MAX_OUTPUT_LENGTH = 200
+MAX_EVENTS = 15
+MAX_REPLY_LENGTH = 1500
 
 
-
-# INPUT GUARDRAILS
-def validate_events(events):
-    """
-    Ensures:
-    - Correct type
-    - Required fields exist
-    - Limits number of events
-    """
+def validate_events(events: list) -> list:
+    """Filter malformed events; preserve all original fields including id."""
     if not isinstance(events, list):
-        raise ValueError("Events must be a list")
-
+        return []
     cleaned = []
-
     for e in events:
         if not isinstance(e, dict):
             continue
-
         if not e.get("start") or not e.get("end"):
             continue
-
-        cleaned.append({
-            "title": e.get("title", "No Title"),
-            "start": e.get("start"),
-            "end": e.get("end"),
-            "priority": e.get("priority", "medium"),
-        })
-
+        cleaned.append(e)
         if len(cleaned) >= MAX_EVENTS:
             break
-
     return cleaned
 
 
-
-# PROMPT GUARDRAILS
-
-def build_safe_prompt(persona: str, events):
-    """
-    Constructs a strict prompt with rules
-    """
-    return f"""
-{persona}
-
-STRICT RULES:
-- Only use the provided events
-- Do NOT assume missing information
-- Keep response under 5 lines
-- Be concise and actionable
-- Do NOT hallucinate
-
-TASK:
-Analyze the schedule:
-- Detect overload
-- Identify low priority meetings
-- Suggest rescheduling or cancellation
-
-EVENTS:
-{events}
-"""
-
-
-# output guardrails
-def sanitize_output(output: str):
-    """
-    Cleans and constrains LLM output
-    """
+def sanitize_output(output: str) -> str:
+    """Trim excessively long replies and de-duplicate repeated lines."""
     if not output or not isinstance(output, str):
-        return "No suggestions available."
-
+        return "I'm not sure how to help with that."
     output = output.strip()
-
-    # limit length
-    if len(output) > MAX_OUTPUT_LENGTH:
-        output = output[:MAX_OUTPUT_LENGTH]
-
-    # basic safety (avoid weird repetition)
+    if len(output) > MAX_REPLY_LENGTH:
+        cut = output[:MAX_REPLY_LENGTH].rsplit(" ", 1)[0]
+        output = cut + "…"
     lines = output.split("\n")
-    unique_lines = []
+    seen: set[str] = set()
+    unique: list[str] = []
     for line in lines:
-        if line.strip() and line not in unique_lines:
-            unique_lines.append(line)
-
-    return "\n".join(unique_lines[:5])  # max 5 lines
-
-
-# for making the output more structured in future iteration
-def enforce_json_output(output: str):
-    """
-    Try to enforce structured output (optional future use)
-    """
-    try:
-        return json.loads(output)
-    except:
-        return {"suggestions": output}
+        key = line.strip()
+        if not key:
+            unique.append(line)
+        elif key not in seen:
+            seen.add(key)
+            unique.append(line)
+    return "\n".join(unique)

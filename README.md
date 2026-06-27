@@ -101,7 +101,10 @@ cd backend
 python -m app.testing.testing_chat_regression
 ```
 
+<<<<<<< HEAD
 Expected output: `Regression result: 6/6 passed`. This also runs automatically on every push/PR via GitHub Actions (`.github/workflows/ci.yml`).
+=======
+>>>>>>> ec252c89913c5724a58ea64072e9a71db4c61f7c
 
 ---
 
@@ -135,10 +138,25 @@ source venv39/bin/activate
 python tools/generate_graphs.py
 ```
 
+<<<<<<< HEAD
 Produces `docs/graphs/architecture.png` and `docs/graphs/regression_results.png`, referenced below.
+=======
+The images will be saved to `docs/graphs/architecture.png` and `docs/graphs/regression_results.png` and are referenced below.
+
+**Project Notes & Next Steps**
+- The code includes a HITL approve/apply flow: `/execute` (queue) + `/approve` (apply).
+- Short-term session memory is file-backed; consider migrating to Redis for multi-instance deployments.
+- The repository currently targets Python 3.9 in `venv39`; Google libraries warn about 3.9 EOL — consider upgrading to 3.10+ and adjusting `requirements.txt`.
+
+
+>>>>>>> ec252c89913c5724a58ea64072e9a71db4c61f7c
 
 ---
 
 ![Architecture](docs/graphs/architecture.png)
 
 ![Regression results](docs/graphs/regression_results.png)
+<<<<<<< HEAD
+=======
+# agentic-calendar-system
+>>>>>>> ec252c89913c5724a58ea64072e9a71db4c61f7c

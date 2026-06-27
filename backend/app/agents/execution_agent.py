@@ -4,9 +4,21 @@ from app.services.calendar_service import (
     create_event,
 )
 
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from app.memory.short_term import get_session
+from app.memory.long_term import update_pattern
+
+
+# Local timezone the user's spoken times ("8pm") are interpreted in.
+# Defaults to UTC; override with APP_TIMEZONE (e.g. "America/New_York").
+def _local_tz():
+    try:
+        return ZoneInfo(os.getenv("APP_TIMEZONE", "UTC"))
+    except Exception:
+        return timezone.utc
 
 
 # ---------------------------------------------------
@@ -14,14 +26,19 @@ from app.memory.short_term import get_session
 # ---------------------------------------------------
 
 def convert_time_to_iso(time_str):
+    """Convert a spoken time like "8pm" into an RFC3339 UTC timestamp.
 
-    today = datetime.utcnow().date()
+    The clock time is interpreted in the user's local timezone (APP_TIMEZONE)
+    and then converted to UTC, so a reschedule to "8pm" lands at 8pm local —
+    not 8pm UTC. A leading "tomorrow" shifts the date forward one day.
+    """
+    raw = (time_str or "").strip().lower()
+    day_offset = 0
+    if raw.startswith("tomorrow"):
+        day_offset = 1
+        raw = raw[len("tomorrow"):].strip()
 
-    cleaned = (
-        time_str
-        .replace(" ", "")
-        .upper()
-    )
+    cleaned = raw.replace(" ", "").upper()
 
     parsed = None
     for pattern in ["%I:%M%p", "%I%p", "%H:%M"]:
@@ -34,12 +51,11 @@ def convert_time_to_iso(time_str):
     if parsed is None:
         raise ValueError(f"Unsupported time format: {time_str}")
 
-    final_dt = datetime.combine(
-        today,
-        parsed.time()
-    )
+    tz = _local_tz()
+    target_date = (datetime.now(tz) + timedelta(days=day_offset)).date()
+    local_dt = datetime.combine(target_date, parsed.time(), tzinfo=tz)
 
-    return final_dt.isoformat() + "Z"
+    return local_dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def find_event_by_title(events, title):
@@ -57,6 +73,17 @@ def find_event_by_title(events, title):
             return e
 
     return None
+
+
+def _event_duration_minutes(event, default=60):
+    """Original duration of an event in minutes, or `default` if unparseable."""
+    try:
+        s = datetime.fromisoformat(str(event.get("start")).replace("Z", "+00:00"))
+        e = datetime.fromisoformat(str(event.get("end")).replace("Z", "+00:00"))
+        mins = int((e - s).total_seconds() / 60)
+        return mins if mins > 0 else default
+    except Exception:
+        return default
 
 
 def should_reschedule(event):
@@ -119,6 +146,9 @@ def execute_actions(actions):
                     event["id"]
                 )
 
+                # Record so the prioritizer can learn frequently-cancelled events.
+                update_pattern((event.get("title") or "").lower(), action="cancel")
+
                 results.append({
                     "status": "EXECUTED",
                     "action": "DELETE",
@@ -171,10 +201,9 @@ def execute_actions(actions):
                     new_start.replace("Z", "")
                 )
 
-                end_dt = (
-                    start_dt +
-                    timedelta(hours=1)
-                )
+                # Preserve the event's original duration instead of forcing 1h.
+                duration = _event_duration_minutes(event)
+                end_dt = start_dt + timedelta(minutes=duration)
 
                 new_end = (
                     end_dt.isoformat() + "Z"
@@ -189,6 +218,8 @@ def execute_actions(actions):
                     new_start,
                     new_end
                 )
+
+                update_pattern((event.get("title") or "").lower(), action="reschedule")
 
                 results.append({
                     "status": "EXECUTED",

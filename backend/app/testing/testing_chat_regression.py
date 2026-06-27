@@ -35,16 +35,8 @@ FAKE_EVENTS = [
 
 
 def reset_state():
-    session_memory.memory_store.clear()
-    session_memory.memory_store.update(
-        {
-            "last_focus_slot": None,
-            "last_suggested_action": None,
-            "last_intent": None,
-            "turns": [],
-            "draft_create_event": None,
-        }
-    )
+    # Clear every session bucket so each regression run starts clean.
+    session_memory._sessions.clear()
 
 
 def patch_workflow_dependencies():

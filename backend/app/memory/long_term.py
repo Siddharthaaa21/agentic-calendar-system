@@ -1,50 +1,36 @@
 import json
-import os
+from pathlib import Path
 
-FILE_PATH = "app/memory/store.json"
+_STORE_FILE = Path(__file__).parent / "store.json"
 
-def load_memory():
-    if not os.path.exists(FILE_PATH):
+
+def _load() -> dict:
+    if not _STORE_FILE.exists():
         return {"patterns": {}}
-
     try:
-        with open(FILE_PATH, "r") as f:
-            content = f.read().strip()
-
-            if not content:   # 🔥 empty file fix
-                return {"patterns": {}}
-
-            return json.loads(content)
-
+        content = _STORE_FILE.read_text().strip()
+        return json.loads(content) if content else {"patterns": {}}
     except Exception:
         return {"patterns": {}}
 
-def save_memory(data):
-    with open(FILE_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+
+def _save(data: dict) -> None:
+    _STORE_FILE.write_text(json.dumps(data, indent=2))
 
 
-def update_pattern(event_title, action=None):
-    data = load_memory()
-    patterns = data.get("patterns", {})
-
-    if event_title not in patterns:
-        patterns[event_title] = {
-            "count": 0,
-            "cancelled": 0,
-            "rescheduled": 0
-        }
-
-    patterns[event_title]["count"] += 1
-
+def update_pattern(event_title: str, action: str = None) -> None:
+    data = _load()
+    patterns = data.setdefault("patterns", {})
+    entry = patterns.setdefault(
+        event_title, {"count": 0, "cancelled": 0, "rescheduled": 0}
+    )
+    entry["count"] += 1
     if action == "cancel":
-        patterns[event_title]["cancelled"] += 1
+        entry["cancelled"] += 1
     elif action == "reschedule":
-        patterns[event_title]["rescheduled"] += 1
-
-    data["patterns"] = patterns
-    save_memory(data)
+        entry["rescheduled"] += 1
+    _save(data)
 
 
-def get_patterns():
-    return load_memory().get("patterns", {})
+def get_patterns() -> dict:
+    return _load().get("patterns", {})

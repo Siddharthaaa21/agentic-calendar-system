@@ -1,7 +1,29 @@
+import os
+import uuid
 import streamlit as st
 import requests
 from datetime import datetime
-API_URL = "http://127.0.0.1:8000"
+
+def _get_api_url():
+    if os.getenv("API_URL"):
+        return os.getenv("API_URL")
+    try:
+        return st.secrets["API_URL"]
+    except Exception:
+        return "http://127.0.0.1:8000"
+
+
+API_URL = _get_api_url()
+DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+
+def _fmt_time(value):
+    """Format an ISO-8601 timestamp as a short human-readable time, e.g. '9:00 AM'."""
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.strftime("%I:%M %p").lstrip("0")
+    except (ValueError, TypeError):
+        return str(value)
 
 st.set_page_config(
     page_title="Axon",
@@ -12,27 +34,38 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-    --bg:       #0a0d12;
+    --bg:       #070a0f;
     --surface:  #111520;
+    --surface-2:#161b2a;
     --border:   #1e2a3a;
-    --accent:   #2563eb;
-    --accent-2: #1d4ed8;
+    --accent:   #3b82f6;
+    --accent-2: #2563eb;
     --muted:    #3d5166;
-    --text:     #e2e8f0;
+    --text:     #e8eef6;
     --text-2:   #64748b;
     --red:      #ef4444;
     --green:    #10b981;
     --amber:    #f59e0b;
+    --glass:    rgba(255,255,255,.03);
+    --grad:     linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
 }
 
 html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"] {
-    background: var(--bg) !important;
+    background:
+        radial-gradient(1200px 600px at 12% -10%, rgba(59,130,246,.10), transparent 55%),
+        radial-gradient(1000px 500px at 100% 0%, rgba(139,92,246,.08), transparent 50%),
+        var(--bg) !important;
+    background-attachment: fixed !important;
     font-family: 'Inter', sans-serif !important;
     color: var(--text) !important;
+    -webkit-font-smoothing: antialiased;
 }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
 
 .block-container { padding: 0 !important; max-width: 100% !important; }
 [data-testid="stSidebar"] { display: none; }
@@ -40,19 +73,39 @@ html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"] {
 
 /* ── HEADER ── */
 .hdr {
-    display: flex; align-items: center; gap: 12px;
-    padding: 14px 24px;
+    display: flex; align-items: center; gap: 13px;
+    padding: 14px 26px;
     border-bottom: 1px solid var(--border);
-    background: var(--surface);
+    background: rgba(17,21,32,.55);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    position: sticky; top: 0; z-index: 50;
+    animation: fadeUp .4s ease both;
+}
+.hdr-logo {
+    width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
+    background: var(--grad);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; font-weight: 700; color: #fff;
+    box-shadow: 0 4px 16px rgba(59,130,246,.4);
 }
 .hdr-dot {
     width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    box-shadow: 0 0 0 0 rgba(16,185,129,.5);
     animation: pulse 2.5s ease infinite; flex-shrink: 0;
 }
-.hdr-dot.offline { background: var(--muted); animation: none; }
-@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
-.hdr-title { font-size: 14px; font-weight: 600; letter-spacing: -.2px; }
-.hdr-sub   { font-size: 11px; color: var(--text-2); }
+.hdr-dot.offline { background: var(--muted); animation: none; box-shadow: none; }
+@keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(16,185,129,.45); }
+    70%  { box-shadow: 0 0 0 7px rgba(16,185,129,0); }
+    100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+}
+.hdr-title {
+    font-size: 15px; font-weight: 700; letter-spacing: -.3px;
+    background: var(--grad); -webkit-background-clip: text;
+    background-clip: text; -webkit-text-fill-color: transparent;
+}
+.hdr-sub   { font-size: 11px; color: var(--text-2); display: flex; align-items: center; gap: 6px; }
 .hdr-right { margin-left: auto; font-size: 11px; color: var(--muted);
              font-family: 'JetBrains Mono', monospace; }
 
@@ -63,26 +116,67 @@ html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"] {
 
 /* ── CHAT ── */
 [data-testid="stChatMessage"] { background: transparent !important; }
+[data-testid="stChatMessage"] { animation: fadeUp .35s ease both; }
 [data-testid="stChatMessageContent"] {
-    background: var(--surface) !important;
+    background: linear-gradient(180deg, var(--surface-2), var(--surface)) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 2px 10px 10px 10px !important;
+    border-radius: 4px 14px 14px 14px !important;
     color: var(--text) !important;
     font-family: 'Inter', sans-serif !important;
     font-size: 13px !important;
     line-height: 1.6 !important;
-    padding: 10px 14px !important;
-    box-shadow: none !important;
+    padding: 11px 15px !important;
+    box-shadow: 0 8px 20px -14px rgba(0,0,0,.8) !important;
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) [data-testid="stChatMessageContent"] {
-    background: rgba(37,99,235,.1) !important;
-    border-color: rgba(37,99,235,.25) !important;
-    border-radius: 10px 2px 10px 10px !important;
+    background: linear-gradient(135deg, rgba(59,130,246,.18), rgba(139,92,246,.12)) !important;
+    border-color: rgba(99,102,241,.3) !important;
+    border-radius: 14px 4px 14px 14px !important;
 }
+
+/* ── CHAT MESSAGE LISTS (e.g. task/priority bullets) ── */
+[data-testid="stChatMessageContent"] ul {
+    margin: 6px 0 !important;
+    padding-left: 0 !important;
+    list-style: none !important;
+}
+[data-testid="stChatMessageContent"] ul li {
+    position: relative;
+    padding: 4px 0 4px 18px !important;
+    margin: 0 !important;
+    border-bottom: 1px solid rgba(255,255,255,.04);
+}
+[data-testid="stChatMessageContent"] ul li:last-child { border-bottom: none; }
+[data-testid="stChatMessageContent"] ul li::before {
+    content: "";
+    position: absolute;
+    left: 2px; top: 13px;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+[data-testid="stChatMessageContent"] ul ul {
+    margin: 2px 0 0 0 !important;
+}
+[data-testid="stChatMessageContent"] ul ul li {
+    border-bottom: none !important;
+    padding: 2px 0 2px 18px !important;
+}
+[data-testid="stChatMessageContent"] ul ul li::before {
+    width: 4px; height: 4px; top: 11px;
+    background: var(--text-2);
+}
+[data-testid="stChatMessageContent"] p { margin: 4px 0 !important; }
 [data-testid="stChatInput"] > div {
-    background: var(--surface) !important;
+    background: rgba(17,21,32,.6) !important;
+    backdrop-filter: blur(12px) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 10px !important;
+    border-radius: 14px !important;
+    transition: border-color .2s ease, box-shadow .2s ease !important;
+}
+[data-testid="stChatInput"] > div:focus-within {
+    border-color: rgba(59,130,246,.5) !important;
+    box-shadow: 0 0 0 3px rgba(59,130,246,.12) !important;
 }
 [data-testid="stChatInput"] textarea {
     background: transparent !important;
@@ -96,10 +190,11 @@ html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"] {
 button[kind="secondary"], [data-testid="stButton"] button {
     font-family: 'Inter', sans-serif !important;
     font-size: 12px !important; font-weight: 500 !important;
-    border-radius: 7px !important;
-    transition: all .15s !important;
-    padding: 5px 14px !important;
+    border-radius: 9px !important;
+    transition: all .18s ease !important;
+    padding: 6px 15px !important;
 }
+[data-testid="stButton"] button:active { transform: scale(.97) !important; }
 .btn-approve button {
     background: transparent !important; color: var(--green) !important;
     border: 1px solid rgba(16,185,129,.3) !important;
@@ -122,27 +217,35 @@ button[kind="secondary"], [data-testid="stButton"] button {
 }
 .btn-refresh button:hover { border-color: var(--accent) !important; color: var(--accent) !important; }
 .btn-all button {
-    background: var(--accent) !important; color: #fff !important;
-    border: none !important; width: 100% !important;
+    background: var(--grad) !important; color: #fff !important;
+    border: none !important; width: 100% !important; font-weight: 600 !important;
+    box-shadow: 0 6px 18px -6px rgba(59,130,246,.6) !important;
 }
-.btn-all button:hover { background: var(--accent-2) !important; }
+.btn-all button:hover { filter: brightness(1.08) !important; box-shadow: 0 8px 22px -6px rgba(59,130,246,.75) !important; }
 
 /* ── CARDS ── */
 .card {
-    background: var(--surface);
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 10px;
-    box-shadow:
-        rgba(0,0,0,.55) 0px 0px,
-        rgba(0,0,0,.54) 0px 9px 20px,
-        rgba(0,0,0,.45) 0px 37px 37px,
-        rgba(0,0,0,.28) 0px 84px 50px;
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 18px 40px -20px rgba(0,0,0,.8);
+    transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease;
+    animation: fadeUp .4s ease both;
+}
+.card:hover {
+    border-color: rgba(59,130,246,.35);
+    transform: translateY(-2px);
+    box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 24px 50px -22px rgba(0,0,0,.9);
 }
 .card-label {
     font-size: 10px; font-weight: 600; text-transform: uppercase;
-    letter-spacing: 1px; color: var(--muted); margin-bottom: 10px;
+    letter-spacing: 1.2px; color: var(--text-2); margin-bottom: 12px;
+    display: flex; align-items: center; gap: 7px;
+}
+.card-label::before {
+    content: ""; width: 3px; height: 12px; border-radius: 2px; background: var(--grad);
 }
 
 /* ── EMPTY STATE ── */
@@ -155,17 +258,25 @@ button[kind="secondary"], [data-testid="stButton"] button {
 .empty-sub   { font-size: 11px; color: var(--muted); }
 
 /* ── STATS ── */
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
-.stat  { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
-.stat-n { font-size: 20px; font-weight: 600; font-family: 'JetBrains Mono', monospace; line-height: 1; }
-.stat-l { font-size: 10px; color: var(--text-2); margin-top: 3px; text-transform: uppercase; letter-spacing: .5px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 12px; }
+.stat  {
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px;
+    transition: transform .18s ease, border-color .18s ease;
+    animation: fadeUp .4s ease both;
+}
+.stat:hover { transform: translateY(-2px); border-color: rgba(59,130,246,.3); }
+.stat-n { font-size: 23px; font-weight: 600; font-family: 'JetBrains Mono', monospace; line-height: 1; }
+.stat-l { font-size: 10px; color: var(--text-2); margin-top: 5px; text-transform: uppercase; letter-spacing: .6px; }
 
 /* ── TIMELINE ── */
 .tl { display: flex; flex-direction: column; }
 .tl-row {
     display: flex; align-items: flex-start; gap: 10px;
-    padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12px;
+    padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 12px;
+    border-radius: 7px; transition: background .15s ease;
 }
+.tl-row:hover { background: var(--glass); }
 .tl-row:last-child { border-bottom: none; }
 .tl-row.conflict {
     background: rgba(239,68,68,.04); border-radius: 6px;
@@ -193,12 +304,17 @@ button[kind="secondary"], [data-testid="stButton"] button {
 
 /* ── ACTION ── */
 .act {
-    padding: 11px 12px; border-radius: 8px; margin-bottom: 8px;
+    padding: 12px 14px; border-radius: 11px; margin-bottom: 8px;
     border: 1px solid var(--border);
-    background: rgba(37,99,235,.03); font-size: 12px;
+    border-left: 3px solid var(--accent);
+    background: linear-gradient(90deg, rgba(59,130,246,.07), rgba(59,130,246,.02));
+    font-size: 12px;
+    transition: border-color .18s ease, transform .18s ease;
+    animation: fadeUp .35s ease both;
 }
+.act:hover { transform: translateX(2px); border-left-color: #8b5cf6; }
 .act-type { font-size: 10px; font-weight: 600; text-transform: uppercase;
-            letter-spacing: .8px; color: var(--accent); margin-bottom: 3px; }
+            letter-spacing: .8px; color: var(--accent); margin-bottom: 4px; }
 .act-desc { color: var(--text); line-height: 1.5; }
 
 /* ── MISC ── */
@@ -212,8 +328,14 @@ button[kind="secondary"], [data-testid="stButton"] button {
 }
 div[data-testid="stSpinner"] { color: var(--text-2) !important; }
 hr { border-color: var(--border) !important; margin: 8px 0 !important; }
-::-webkit-scrollbar { width: 3px; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ── EMPTY STATE hover ── */
+.empty { transition: border-color .2s ease; animation: fadeUp .4s ease both; }
+.empty:hover { border-color: var(--accent); }
 </style>
 """, unsafe_allow_html=True)
 
@@ -223,7 +345,11 @@ hr { border-color: var(--border) !important; margin: 8px 0 !important; }
 def fetch_schedule():
     """Returns (data_dict, error_string). One of them will be None."""
     try:
-        r = requests.get(f"{API_URL}/today", timeout=6)
+        r = requests.get(
+            f"{API_URL}/today",
+            params={"session_id": st.session_state.session_id},
+            timeout=6,
+        )
         r.raise_for_status()
         return r.json(), None
     except requests.exceptions.ConnectionError:
@@ -237,7 +363,11 @@ def fetch_schedule():
 
 def call_execute(actions):
     try:
-        return requests.post(f"{API_URL}/execute", json={"actions": actions}, timeout=6).json()
+        return requests.post(
+            f"{API_URL}/execute",
+            json={"actions": actions, "session_id": st.session_state.session_id},
+            timeout=6,
+        ).json()
     except Exception as e:
         st.warning(f"Execute failed: {e}")
         return {}
@@ -245,7 +375,11 @@ def call_execute(actions):
 
 def call_approve():
     try:
-        return requests.post(f"{API_URL}/approve", json={"approval": "yes"}, timeout=6).json()
+        return requests.post(
+            f"{API_URL}/approve",
+            json={"approval": "yes", "session_id": st.session_state.session_id},
+            timeout=6,
+        ).json()
     except Exception as e:
         st.warning(f"Approve failed: {e}")
         return {}
@@ -254,7 +388,11 @@ def ask_agent(prompt, history=None):
         history = history or []
         r = requests.post(
             f"{API_URL}/chat",
-            json={"message": prompt, "history": history},
+            json={
+                "message": prompt,
+                "history": history,
+                "session_id": st.session_state.session_id,
+            },
             timeout=20
         )
 
@@ -274,20 +412,23 @@ defaults = {
     "messages": [{
         "role": "assistant",
         "content": (
-            "Hi — I'm **Axon**, your AI calendar agent.\n\n"
-            "I can analyze your schedule, detect conflicts, "
-            "suggest optimizations, and help reschedule meetings intelligently.\n\n"
-            "Try asking:\n"
-            "- 'How busy is my day?'\n"
-            "- 'What should I move?'\n"
-            "- 'Suggest better focus slots'\n"
-            "- 'Reschedule my low priority meetings'"
+            "Hey — I’m **Axon**. I can help you plan your day like a real assistant, "
+            "not just a command bot.\n\n"
+            "I keep context across turns, so you can talk naturally.\n\n"
+            "You can start with:\n"
+            "- 'what’s my day looking like?'\n"
+            "- 'anything I should shift?'\n"
+            "- 'why do you suggest that slot?'\n"
+            "- 'can we move checking to 10 pm?'"
         ),
     }],
     "data": None,
     "error": None,
     "approved": set(),
     "rejected": set(),
+    # Stable per-browser-session id so this user's conversation memory and
+    # pending actions stay isolated from other users on the same backend.
+    "session_id": uuid.uuid4().hex,
 }
 
 for k, v in defaults.items():
@@ -295,8 +436,9 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # Auto-load calendar once
+_connect_label = "Loading demo calendar..." if DEMO_MODE else "Connecting to Google Calendar..."
 if st.session_state.data is None:
-    with st.spinner("Connecting to Google Calendar..."):
+    with st.spinner(_connect_label):
         result, err = fetch_schedule()
 
     if err:
@@ -304,16 +446,19 @@ if st.session_state.data is None:
     else:
         st.session_state.data = result
 
-connected   = st.session_state.data is not None
-dot_cls     = "hdr-dot" if connected else "hdr-dot offline"
-status_text = "Connected to Google Calendar" if connected else "Not connected"
+connected = st.session_state.data is not None
+dot_cls   = "hdr-dot" if connected else "hdr-dot offline"
+if connected:
+    status_text = "Demo mode — sample calendar" if DEMO_MODE else "Connected to Google Calendar"
+else:
+    status_text = "Not connected"
 
 st.markdown(f"""
 <div class="hdr">
-    <div class="{dot_cls}"></div>
+    <div class="hdr-logo">A</div>
     <div>
         <div class="hdr-title">Axon</div>
-        <div class="hdr-sub">{status_text}</div>
+        <div class="hdr-sub"><span class="{dot_cls}"></span>{status_text}</div>
     </div>
     <div class="hdr-right">{datetime.now().strftime('%a %d %b · %I:%M %p')}</div>
 </div>
@@ -421,7 +566,7 @@ with right:
         """, unsafe_allow_html=True)
 
     # ── Dashboard ──
-    else:
+    if data is not None and not st.session_state.error:
         events    = data.get("events", [])
         conflicts = data.get("conflicts", [])
         actions   = data.get("actions", [])
@@ -454,21 +599,23 @@ with right:
 
         # Schedule
         if events:
+            conflict_titles = " | ".join(c.get("title", "") for c in conflicts).lower()
             rows = ""
             for e in events:
-                p   = e.get("priority", "MED")
-                dot = {"HIGH": "h", "MED": "m", "LOW": "l"}.get(p, "m")
-                is_conflict = e.get("conflict") or "conflict" in e["title"].lower()
+                p   = str(e.get("priority", "medium")).lower()
+                dot = {"high": "h", "medium": "m", "low": "l"}.get(p, "m")
+                is_conflict = e.get("conflict") or e["title"].lower() in conflict_titles
                 cls  = "tl-row conflict" if is_conflict else "tl-row"
                 name = (f'<span class="tl-name err">⚠ {e["title"]}</span>'
                         if is_conflict else f'<span class="tl-name">{e["title"]}</span>')
+                start, end = _fmt_time(e["start"]), _fmt_time(e["end"])
                 rows += f"""
                 <div class="{cls}">
-                    <span class="tl-time">{e['start']}</span>
+                    <span class="tl-time">{start}</span>
                     <div class="dot {dot}"></div>
                     <div>
                         {name}
-                        <div class="tl-sub">{e['start']} – {e['end']} · {p}</div>
+                        <div class="tl-sub">{start} – {end} · {p.title()}</div>
                     </div>
                 </div>"""
 
@@ -482,8 +629,8 @@ with right:
                     <span>Load</span>
                     <span style="color:{load_c};">{load_pct}% · {load_label}</span>
                 </div>
-                <div style="height:2px;border-radius:2px;background:var(--border);margin-top:4px;overflow:hidden;">
-                    <div style="height:100%;width:{load_pct}%;background:{load_c};border-radius:2px;"></div>
+                <div style="height:6px;border-radius:4px;background:rgba(255,255,255,.05);margin-top:6px;overflow:hidden;">
+                    <div style="height:100%;width:{load_pct}%;background:linear-gradient(90deg,{load_c},{load_c}cc);border-radius:4px;transition:width .6s ease;box-shadow:0 0 10px {load_c}66;"></div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -495,49 +642,100 @@ with right:
             </div>
             """, unsafe_allow_html=True)
 
-    # Conflicts
-    conflicts = data.get("conflicts", [])
-    if conflicts:
-        cfl_html = ""
-        for c in conflicts:
-            cls = "cfl warn" if c.get("warn") else "cfl"
-            cfl_html += f"""
-            <div class="{cls}">
-                <div>
-                    <div class="cfl-body">{c['title']}</div>
-                    <div class="cfl-sub">{c.get('detail', '')}</div>
-                </div>
-            </div>"""
-        st.markdown(f"""
-        <div class="card">
-            <div class="card-label">Conflicts</div>
-            {cfl_html}
-        </div>
-        """, unsafe_allow_html=True)
-
-
-
-    # Actions
-    icon_map = {"RESCHEDULE": "↗", "REBALANCE": "⇄", "CANCEL": "×", "CREATE": "+"}
-
-    if pending:
-        for a in pending:
-            aid  = a["id"]
-            icon = icon_map.get(a["action"], "→")
+        # Conflicts
+        conflicts = data.get("conflicts", [])
+        if conflicts:
+            cfl_html = ""
+            for c in conflicts:
+                cls = "cfl warn" if c.get("warn") else "cfl"
+                cfl_html += f"""
+                <div class="{cls}">
+                    <div>
+                        <div class="cfl-body">{c['title']}</div>
+                        <div class="cfl-sub">{c.get('detail', '')}</div>
+                    </div>
+                </div>"""
             st.markdown(f"""
-            <div class="act">
-                <div class="act-type">{icon} {a['action']}</div>
-                <div class="act-desc"><strong>{a['title']}</strong> — {a.get('detail', '')}</div>
+            <div class="card">
+                <div class="card-label">Conflicts</div>
+                <div class="cfl-list">{cfl_html}</div>
             </div>
             """, unsafe_allow_html=True)
 
-            needs_edit = a["action"] in ("RESCHEDULE", "REBALANCE")
-            cols = st.columns([1, 1, 1] if needs_edit else [1, 1, 2])
+        # Actions
+        icon_map = {"RESCHEDULE": "↗", "REBALANCE": "⇄", "DELETE": "×", "CANCEL": "×", "CREATE": "+"}
+        target_label = "the demo calendar" if DEMO_MODE else "Google Calendar"
 
-            with cols[0]:
-                st.markdown('<div class="btn-approve">', unsafe_allow_html=True)
-                if st.button("Approve", key=f"ap_{aid}"):
-                    call_execute([a])
+        if pending:
+            for a in pending:
+                aid  = a["id"]
+                action_type = a["action"].upper()
+                icon = icon_map.get(action_type, "→")
+                st.markdown(f"""
+                <div class="act">
+                    <div class="act-type">{icon} {action_type}</div>
+                    <div class="act-desc"><strong>{a['title']}</strong> — {a.get('detail', '')}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                needs_edit = action_type in ("RESCHEDULE", "REBALANCE")
+                cols = st.columns([1, 1, 1] if needs_edit else [1, 1, 2])
+
+                with cols[0]:
+                    st.markdown('<div class="btn-approve">', unsafe_allow_html=True)
+                    if st.button("Approve", key=f"ap_{aid}"):
+                        call_execute([a])
+                        approve_result = call_approve()
+                        results = approve_result.get("results", [])
+                        failed = [item for item in results if item.get("status") == "FAILED"]
+
+                        if failed:
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": f"I couldn't apply **{a['title']}**: {failed[0].get('error', 'unknown error')}",
+                            })
+                        else:
+                            st.session_state.approved.add(aid)
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": f"✓ **{a['title']}** pushed to {target_label}.",
+                            })
+
+                        refreshed, err = fetch_schedule()
+                        if not err and refreshed:
+                            st.session_state.data = refreshed
+                        st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                with cols[1]:
+                    st.markdown('<div class="btn-reject">', unsafe_allow_html=True)
+                    if st.button("Reject", key=f"rj_{aid}"):
+                        st.session_state.rejected.add(aid)
+                        st.session_state.messages.append({
+                            "role": "assistant",
+                            "content": f"Dismissed — **{a['title']}** left unchanged.",
+                        })
+                        st.rerun()
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                if needs_edit:
+                    with cols[2]:
+                        st.markdown('<div class="btn-edit">', unsafe_allow_html=True)
+                        if st.button("Edit time", key=f"ed_{aid}"):
+                            st.session_state.messages.append({
+                                "role": "assistant",
+                                "content": f"What time should I move **{a['title']}** to?",
+                            })
+                            st.rerun()
+                        st.markdown('</div>', unsafe_allow_html=True)
+
+                st.markdown('<div style="height:2px;"></div>', unsafe_allow_html=True)
+
+            if len(pending) > 1:
+                st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
+                st.markdown('<div class="btn-all">', unsafe_allow_html=True)
+                if st.button("Approve all", key="all"):
+                    call_execute(pending)
                     approve_result = call_approve()
                     results = approve_result.get("results", [])
                     failed = [item for item in results if item.get("status") == "FAILED"]
@@ -545,13 +743,14 @@ with right:
                     if failed:
                         st.session_state.messages.append({
                             "role": "assistant",
-                            "content": f"I couldn't apply **{a['title']}**: {failed[0].get('error', 'unknown error')}",
+                            "content": f"Applied some changes, but {len(failed)} action(s) failed."
                         })
                     else:
-                        st.session_state.approved.add(aid)
+                        for a in pending:
+                            st.session_state.approved.add(a["id"])
                         st.session_state.messages.append({
                             "role": "assistant",
-                            "content": f"✓ **{a['title']}** pushed to Google Calendar.",
+                            "content": f"✓ All {len(pending)} actions applied to {target_label}.",
                         })
 
                     refreshed, err = fetch_schedule()
@@ -560,59 +759,7 @@ with right:
                     st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            with cols[1]:
-                st.markdown('<div class="btn-reject">', unsafe_allow_html=True)
-                if st.button("Reject", key=f"rj_{aid}"):
-                    st.session_state.rejected.add(aid)
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": f"Dismissed — **{a['title']}** left unchanged.",
-                    })
-                    st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
-
-            if needs_edit:
-                with cols[2]:
-                    st.markdown('<div class="btn-edit">', unsafe_allow_html=True)
-                    if st.button("Edit time", key=f"ed_{aid}"):
-                        st.session_state.messages.append({
-                            "role": "assistant",
-                            "content": f"What time should I move **{a['title']}** to?",
-                        })
-                        st.rerun()
-                    st.markdown('</div>', unsafe_allow_html=True)
-
-            st.markdown('<div style="height:2px;"></div>', unsafe_allow_html=True)
-
-        if len(pending) > 1:
-            st.markdown('<div style="height:4px;"></div>', unsafe_allow_html=True)
-            st.markdown('<div class="btn-all">', unsafe_allow_html=True)
-            if st.button("Approve all", key="all"):
-                call_execute(pending)
-                approve_result = call_approve()
-                results = approve_result.get("results", [])
-                failed = [item for item in results if item.get("status") == "FAILED"]
-
-                if failed:
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": f"Applied some changes, but {len(failed)} action(s) failed."
-                    })
-                else:
-                    for a in pending:
-                        st.session_state.approved.add(a["id"])
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": f"✓ All {len(pending)} actions applied to Google Calendar.",
-                    })
-
-                refreshed, err = fetch_schedule()
-                if not err and refreshed:
-                    st.session_state.data = refreshed
-                st.rerun()
-            st.markdown('</div>', unsafe_allow_html=True)
-
-    elif actions:
-        st.success("All actions resolved")
+        elif actions:
+            st.success("All actions resolved")
 
 st.markdown('</div>', unsafe_allow_html=True)

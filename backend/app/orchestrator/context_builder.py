@@ -1,48 +1,89 @@
+import time
+from datetime import datetime
+
 from app.services.calendar_service import get_today_events
 from app.tasks.scheduler import find_free_slot
 from app.memory.state_manager import load_preferences
 from app.memory.session_memory import get_recent_turns
 from app.core.guardrails import validate_events
+from app.agents.planner_agent import structure_events
+from app.agents.prioritizer_agent import assign_priority
+
+# ---------------------------------------------------------------------------
+# Event cache: avoid hitting the Google Calendar API on every chat message
+# ---------------------------------------------------------------------------
+_cache: dict = {"events": None, "ts": 0.0}
+_CACHE_TTL = 300  # seconds (5 minutes)
 
 
-def _infer_conversation_prefs(conversation_history):
-    if not conversation_history:
+def invalidate_event_cache() -> None:
+    """Call this after a calendar mutation so the next request fetches fresh data."""
+    _cache["events"] = None
+    _cache["ts"] = 0.0
+
+
+def _get_events() -> list:
+    now = time.monotonic()
+    if _cache["events"] is None or (now - _cache["ts"]) > _CACHE_TTL:
+        # Enrich + prioritize here too (not just in /today) so the chat path's
+        # events carry a `priority` field. Without this, the high-priority
+        # reschedule guard and the optimize/reschedule workflows can't see it.
+        # Result is cached for _CACHE_TTL so the extra LLM calls don't run per
+        # message.
+        structured = structure_events(get_today_events())
+        _cache["events"] = validate_events(assign_priority(structured))
+        _cache["ts"] = now
+    return _cache["events"]
+
+
+# ---------------------------------------------------------------------------
+# Load percentage — based on actual meeting minutes vs a 10-hour workday
+# ---------------------------------------------------------------------------
+def compute_load(events: list) -> int:
+    workday_minutes = 10 * 60
+    total = 0
+    for e in events:
+        try:
+            s = datetime.fromisoformat(str(e["start"]).replace("Z", "+00:00"))
+            end = datetime.fromisoformat(str(e["end"]).replace("Z", "+00:00"))
+            total += max(0, int((end - s).total_seconds() / 60))
+        except Exception:
+            total += 30
+    return min(int(total / workday_minutes * 100), 100)
+
+
+# ---------------------------------------------------------------------------
+# Conversation preference inference
+# ---------------------------------------------------------------------------
+def _infer_conversation_prefs(history: list) -> dict:
+    if not history:
         return {}
-
     recent_user = [
         item.get("content", "")
-        for item in conversation_history
+        for item in history
         if item.get("role") == "user"
     ][-5:]
     merged = " ".join(recent_user).lower()
-
     return {
-        "prefers_brief": any(token in merged for token in ["short", "brief", "quick", "tldr"]),
-        "wants_explanation": any(token in merged for token in ["why", "explain", "reason"]),
+        "prefers_brief": any(t in merged for t in ("short", "brief", "quick", "tldr")),
+        "wants_explanation": any(t in merged for t in ("why", "explain", "reason")),
     }
 
 
-def build_context(conversation_history=None):
-
+# ---------------------------------------------------------------------------
+# Main context builder
+# ---------------------------------------------------------------------------
+def build_context(conversation_history: list = None) -> dict:
     conversation_history = conversation_history or get_recent_turns(limit=8)
 
-    events = validate_events(get_today_events())
+    events = _get_events()
 
+    sorted_events = sorted(events, key=lambda x: str(x.get("start", "")))
     conflicts = []
-    free_slot = find_free_slot(events, 60)
-
-    sorted_events = sorted(
-        events,
-        key=lambda x: x["start"]
-    )
-
     for i in range(len(sorted_events) - 1):
-
-        current_end = sorted_events[i]["end"]
-        next_start = sorted_events[i + 1]["start"]
-
-        if current_end > next_start:
-
+        curr_end = str(sorted_events[i].get("end", ""))
+        next_start = str(sorted_events[i + 1].get("start", ""))
+        if curr_end > next_start:
             conflicts.append({
                 "title": (
                     f"{sorted_events[i]['title']} overlaps with "
@@ -50,7 +91,8 @@ def build_context(conversation_history=None):
                 )
             })
 
-    load_pct = min(len(events) * 18, 100)
+    free_slot = find_free_slot(events, 60)
+    load_pct = compute_load(events)
 
     return {
         "events": events,

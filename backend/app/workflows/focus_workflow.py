@@ -7,10 +7,13 @@ def focus_workflow(message, context):
 
     if not slot:
 
+        if not context.get("events"):
+            reply = "Your calendar is clear today — you've got open time whenever you need it."
+        else:
+            reply = "Your calendar is heavily packed today — I couldn't find an open focus window."
+
         return {
-            "reply": (
-                "Your calendar is heavily packed today."
-            ),
+            "reply": reply,
             "events": context["events"],
             "actions": []
         }
@@ -29,9 +32,9 @@ def focus_workflow(message, context):
         f"{pretty_time(start)} → {pretty_time(end)}\n\n"
 
         "Why this works:\n"
-        "• Minimal meeting interruptions\n"
-        "• Good cognitive spacing\n"
-        "• Reduces context switching"
+        "- Minimal meeting interruptions\n"
+        "- Good cognitive spacing\n"
+        "- Reduces context switching"
     )
 
     return {
