@@ -171,29 +171,66 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
         append_turn("assistant", response["reply"])
         return response
 
-    # Focus-window follow-up: "add X to that slot / this window"
-    if re.search(r"\b(that time|that slot|focus window|this window)\b", lower_msg):
+    # ------------------------------------------------------------------
+    # Focus-window follow-up: the bot just recommended a free slot and the
+    # user wants to drop a task into it. Accept the many natural ways to refer
+    # back to "the slot" — "the slot", "that window", "there", "in it", "that
+    # gap" — and the many create verbs ("add/schedule/put/book/block/fit").
+    # This is the flow that previously dropped context and re-asked for a time.
+    # ------------------------------------------------------------------
+    slot_reference = re.search(
+        r"\b(that|this|the)\s+(slot|window|gap|time|focus\s*window)\b"
+        r"|\b(there|in\s+it|in\s+that|into\s+it)\b",
+        lower_msg,
+    )
+    slot_fill_verb = re.search(
+        r"\b(add|schedule|create|put|book|block|slot|fit|set\s+up|plan)\b", lower_msg
+    )
+    if slot_reference and slot_fill_verb:
         slot = get_memory("last_focus_slot")
         if slot:
-            title_match = re.search(
-                r"\b(?:add|schedule|create)\s+(.+?)\s+(?:to|in|at|for)\b", lower_msg
-            )
-            if title_match:
-                title = title_match.group(1).strip().title()
+            # Prefer a title the entity extractor found; else pull the words
+            # between the verb and the slot reference ("put **gym** in that
+            # window" → "gym"); else fall back to any pending draft title.
+            title = entities.get("event_title")
+            if not title:
+                m = re.search(
+                    r"\b(?:add|schedule|create|put|book|block|slot|fit|plan)\s+"
+                    r"(?:in\s+|some\s+time\s+for\s+)?(.+?)\s+"
+                    r"(?:to|in|at|for|into|during|on)\b",
+                    lower_msg,
+                )
+                if m:
+                    title = m.group(1).strip()
+            if not title:
+                title = (get_memory("draft_create_event") or {}).get("title")
+
+            if title:
+                # Drop a trailing slot reference the extractor may have kept
+                # ("deep work there" → "deep work", "reading in it" → "reading").
+                title = re.sub(
+                    r"\s+(there|here|in\s+it|into\s+it|to\s+it|in\s+that)$",
+                    "", title.strip(), flags=re.IGNORECASE,
+                ).strip()
+                title = title.title()
+                save_memory("draft_create_event", {"title": title})
+                response = _normalize_response({
+                    "reply": f"I can schedule **{title}** from {slot['start']} to {slot['end']}. Approve when you're ready.",
+                    "intent": "CREATE_EVENT",
+                    "actions": [{
+                        "action": "create",
+                        "event_title": title,
+                        "title": title,
+                        "start": slot["start"],
+                        "end": slot["end"],
+                    }],
+                }, "CREATE_EVENT")
             else:
-                title = (get_memory("draft_create_event") or {}).get("title", "Focus Task")
-            save_memory("draft_create_event", {"title": title})
-            response = _normalize_response({
-                "reply": f"I can schedule **{title}** from {slot['start']} to {slot['end']}. Approve?",
-                "intent": "CREATE_EVENT",
-                "actions": [{
-                    "action": "create",
-                    "event_title": title,
-                    "title": title,
-                    "start": slot["start"],
-                    "end": slot["end"],
-                }],
-            }, "CREATE_EVENT")
+                response = _normalize_response({
+                    "reply": f"Sure — I can use your {slot['start']}–{slot['end']} window. What should I call the event?",
+                    "intent": "CREATE_EVENT",
+                }, "CREATE_EVENT")
+                save_memory("awaiting_event_title", True)
             append_turn("assistant", response["reply"])
             return response
 

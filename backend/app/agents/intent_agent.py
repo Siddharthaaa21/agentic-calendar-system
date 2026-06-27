@@ -8,6 +8,24 @@ from app.core.llm import call_llm
 logger = logging.getLogger(__name__)
 
 
+# Whole-message affirmations → approve the pending action. Anchored at both
+# ends so partial commands ("okay add gym...") never match.
+_AFFIRM_RE = re.compile(
+    r"^(yes|yeah|yea|ya+|yep|yup|y|ok|okay|k|sure|sounds good|sounds great|"
+    r"absolutely|definitely|please|approve[d]?|confirm(ed)?|go|go ahead|"
+    r"go for it|go on|do it|do that|let'?s do it|lets do it|proceed|"
+    r"yes please|please do|make it so|perfect)"
+    r"(\s+(do|go)\s+(it|ahead|that|on|for it))?\s*[!.…]*$",
+    re.IGNORECASE,
+)
+
+_REJECT_RE = re.compile(
+    r"^(no|nope|nah|n|don'?t|do not|cancel|cancel that|reject|stop|never\s?mind|"
+    r"forget it|no thanks|not now|no don'?t|leave it)\s*[!.…]*$",
+    re.IGNORECASE,
+)
+
+
 RULE_INTENTS = {
 
     "RESCHEDULE_EVENT": [
@@ -23,6 +41,25 @@ RULE_INTENTS = {
         "cancel"
     ],
 
+    # Free-slot / conflict / optimize keywords are checked BEFORE GET_TODAY so
+    # phrasings that also contain "today" ("any gaps today?", "conflicts today")
+    # route to the more specific intent instead of a generic day summary.
+    "SHOW_CONFLICTS": [
+        "conflict",
+        "overlap"
+    ],
+
+    "GET_FREE_SLOTS": [
+        "free slot",
+        "available",
+        "free time",
+        "gap",
+        "open slot",
+        "open time",
+        "focus time",
+        "focus window"
+    ],
+
     "GET_TODAY": [
         "today",
         "schedule",
@@ -34,18 +71,6 @@ RULE_INTENTS = {
         "plans today",
         "the plan",
         "my day"
-    ],
-
-    "SHOW_CONFLICTS": [
-        "conflict",
-        "overlap"
-    ],
-
-    "GET_FREE_SLOTS": [
-        "free slot",
-        "available",
-        "free time",
-        "gap"
     ],
 
     "OPTIMIZE_DAY": [
@@ -106,11 +131,14 @@ def detect_rule_intent(message: str):
 
     msg = message.lower().strip()
 
-    # Approval/rejection should be checked first (exact match)
-    if msg in {"yes", "approve", "do it", "ok", "sure", "go", "proceed"}:
+    # Approval / rejection — match the WHOLE message so natural affirmations
+    # ("ya do it", "yeah go ahead", "ok do that", "sounds good") are caught,
+    # while a longer command that merely starts with "ok"/"yes" ("okay add gym
+    # to the slot") is NOT swallowed as an approval.
+    if _AFFIRM_RE.match(msg):
         return {"intent": "APPROVE_ACTIONS", "source": "RULE"}
 
-    if msg in {"no", "reject", "cancel", "nope", "nah", "don't"}:
+    if _REJECT_RE.match(msg):
         return {"intent": "REJECT_ACTIONS", "source": "RULE"}
 
     if (
