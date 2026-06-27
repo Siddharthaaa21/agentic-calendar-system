@@ -1,3 +1,4 @@
+import html
 import os
 import uuid
 import streamlit as st
@@ -13,8 +14,30 @@ def _get_api_url():
         return "http://127.0.0.1:8000"
 
 
+def _get_api_key():
+    """Shared secret for the backend's X-API-Key auth. Must match the backend's
+    API_KEY; without this the frontend gets 401s once the backend is secured."""
+    if os.getenv("API_KEY"):
+        return os.getenv("API_KEY")
+    try:
+        return st.secrets["API_KEY"]
+    except Exception:
+        return ""
+
+
 API_URL = _get_api_url()
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
+
+# Attached to every backend request. Empty when the backend runs open (demo).
+_API_KEY = _get_api_key()
+_AUTH_HEADERS = {"X-API-Key": _API_KEY} if _API_KEY else {}
+
+
+def _esc(value):
+    """HTML-escape any value before interpolating it into an unsafe_allow_html
+    block. Event/conflict/action text is user- or calendar-supplied, so without
+    this a crafted title (e.g. <img src=x onerror=...>) would execute as XSS."""
+    return html.escape(str(value))
 
 
 def _fmt_time(value):
@@ -348,6 +371,7 @@ def fetch_schedule():
         r = requests.get(
             f"{API_URL}/today",
             params={"session_id": st.session_state.session_id},
+            headers=_AUTH_HEADERS,
             timeout=6,
         )
         r.raise_for_status()
@@ -366,6 +390,7 @@ def call_execute(actions):
         return requests.post(
             f"{API_URL}/execute",
             json={"actions": actions, "session_id": st.session_state.session_id},
+            headers=_AUTH_HEADERS,
             timeout=6,
         ).json()
     except Exception as e:
@@ -378,6 +403,7 @@ def call_approve():
         return requests.post(
             f"{API_URL}/approve",
             json={"approval": "yes", "session_id": st.session_state.session_id},
+            headers=_AUTH_HEADERS,
             timeout=6,
         ).json()
     except Exception as e:
@@ -393,6 +419,7 @@ def ask_agent(prompt, history=None):
                 "history": history,
                 "session_id": st.session_state.session_id,
             },
+            headers=_AUTH_HEADERS,
             timeout=20
         )
 
@@ -552,7 +579,7 @@ with right:
         st.markdown(f"""
         <div class="empty">
             <div class="empty-title">Unable to fetch schedule</div>
-            <div class="empty-sub">{st.session_state.error}</div>
+            <div class="empty-sub">{_esc(st.session_state.error)}</div>
         </div>
         """, unsafe_allow_html=True)
 
@@ -606,8 +633,9 @@ with right:
                 dot = {"high": "h", "medium": "m", "low": "l"}.get(p, "m")
                 is_conflict = e.get("conflict") or e["title"].lower() in conflict_titles
                 cls  = "tl-row conflict" if is_conflict else "tl-row"
-                name = (f'<span class="tl-name err">⚠ {e["title"]}</span>'
-                        if is_conflict else f'<span class="tl-name">{e["title"]}</span>')
+                title = _esc(e["title"])
+                name = (f'<span class="tl-name err">⚠ {title}</span>'
+                        if is_conflict else f'<span class="tl-name">{title}</span>')
                 start, end = _fmt_time(e["start"]), _fmt_time(e["end"])
                 rows += f"""
                 <div class="{cls}">
@@ -651,8 +679,8 @@ with right:
                 cfl_html += f"""
                 <div class="{cls}">
                     <div>
-                        <div class="cfl-body">{c['title']}</div>
-                        <div class="cfl-sub">{c.get('detail', '')}</div>
+                        <div class="cfl-body">{_esc(c['title'])}</div>
+                        <div class="cfl-sub">{_esc(c.get('detail', ''))}</div>
                     </div>
                 </div>"""
             st.markdown(f"""
@@ -673,8 +701,8 @@ with right:
                 icon = icon_map.get(action_type, "→")
                 st.markdown(f"""
                 <div class="act">
-                    <div class="act-type">{icon} {action_type}</div>
-                    <div class="act-desc"><strong>{a['title']}</strong> — {a.get('detail', '')}</div>
+                    <div class="act-type">{icon} {_esc(action_type)}</div>
+                    <div class="act-desc"><strong>{_esc(a['title'])}</strong> — {_esc(a.get('detail', ''))}</div>
                 </div>
                 """, unsafe_allow_html=True)
 

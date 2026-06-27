@@ -30,6 +30,14 @@ app = FastAPI(title="Axon — Agentic Calendar System")
 # credential-free calendar-mutation API. Set ALLOWED_ORIGINS (comma-separated)
 # to the deployed frontend origin(s) in production.
 _allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8501,http://127.0.0.1:8501")
+if _allowed_origins == "*":
+    # Wildcard CORS lets any website call this API from a victim's browser.
+    # Combined with an unset API_KEY that means a fully open, drive-able
+    # calendar-mutation API — only acceptable for a throwaway local demo.
+    logger.warning(
+        "ALLOWED_ORIGINS='*' — CORS is wide open. Set it to your frontend "
+        "origin(s) for any real deployment."
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"] if _allowed_origins == "*" else [o.strip() for o in _allowed_origins.split(",")],
@@ -48,21 +56,33 @@ MAX_ACTIONS_PER_REQUEST = 25
 # matching `X-API-Key` header. When it's unset (e.g. local dev / DEMO_MODE
 # public demo), the API stays open so visitors can try it freely.
 _API_KEY = os.getenv("API_KEY", "").strip()
+_DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 
 def require_api_key(provided: str = Security(_api_key_header)) -> None:
     if not _API_KEY:
-        return  # auth disabled
+        return  # auth disabled (only reachable in DEMO_MODE — see fail-closed check below)
     # Constant-time compare to avoid leaking the key via timing.
     if not provided or not secrets.compare_digest(provided, _API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing API key.")
 
 
+# Fail closed: a real (non-demo) deployment must not boot wide open. Without an
+# API_KEY the mutation endpoints would let anyone read/edit/delete the connected
+# calendar, so we refuse to start instead of silently exposing it. DEMO_MODE
+# uses an in-memory mock calendar, so leaving it open there is harmless.
 if not _API_KEY:
+    if not _DEMO_MODE:
+        raise RuntimeError(
+            "API_KEY is not set and DEMO_MODE is off. Refusing to start an "
+            "UNAUTHENTICATED API against a real calendar. Set API_KEY (generate "
+            "one with: python -c 'import secrets; print(secrets.token_urlsafe(32))') "
+            "or set DEMO_MODE=true for a throwaway demo."
+        )
     logger.warning(
-        "API_KEY is not set — the API is UNAUTHENTICATED. Set API_KEY in the "
-        "environment to require an X-API-Key header on every request."
+        "API_KEY is not set — the API is UNAUTHENTICATED (allowed because "
+        "DEMO_MODE=true). Never run a real calendar this way."
     )
 
 
