@@ -1,29 +1,22 @@
 # Axon — Agentic Calendar System
 
-A conversational agent that manages your Google Calendar through natural language: it understands intent, plans and prioritizes your day, detects conflicts, finds free slots, and proposes create/reschedule/delete actions through a human-in-the-loop (HITL) approval gate before anything touches your real calendar.
+A conversational agent that manages your Google Calendar in plain English. It understands intent, structures and prioritizes your day, detects conflicts, finds free slots, and proposes create / reschedule / delete actions — but **never touches your real calendar without explicit approval**, thanks to a human-in-the-loop (HITL) gate.
 
-Built with a FastAPI backend, a Streamlit frontend, and Groq (Llama 3.1) for LLM reasoning.
+Built with a **FastAPI** backend, a **Streamlit** frontend, and **Groq (Llama 3.1)** for LLM reasoning.
 
-**Status:** Active development — deterministic regression tests passing locally and in CI.
-
-**Contents**
-- `backend/` — FastAPI backend: agents (intent, entity, planner, prioritizer, execution), orchestrator (router, workflow, context builder), memory, and tests.
-- `frontend/` — Streamlit UI for interactive chat and approvals.
-- `tools/` — helper scripts (README graph generation).
+> **Try it:** `"what's for today"` · `"show conflicts"` · `"free slots"` · `"move gym to 8pm"` · `"delete lunch"`
 
 ---
 
-## Try it live (demo mode)
+## Why it's built this way
 
-The hosted demo runs with `DEMO_MODE=true`, which swaps Google Calendar for an in-memory mock calendar pre-seeded with a sample day (including an intentional scheduling conflict). No Google account or API keys needed — just chat with it:
-
-- "what's for today"
-- "show conflicts"
-- "free slots"
-- "move gym to 8pm"
-- "delete lunch"
-
-Demo state is shared and resets when the server restarts — it's for trying out the chat → plan → approve → execute loop, not for real scheduling.
+| Design choice | What it buys you |
+|---|---|
+| **HITL approval gate** (`/execute` queues, `/approve` applies) | The LLM can *propose* but never *commit*. Every mutation is shown to the user before it reaches the calendar — no silent, hallucinated edits. |
+| **Multi-agent pipeline** | Intent, entity, planning, prioritization, and execution are separate, testable agents instead of one mega-prompt — easier to debug and extend. |
+| **Optional API-key auth** | The mutation API is locked behind an `X-API-Key` header when `API_KEY` is set (constant-time compare), with a loud startup warning if it's left open. |
+| **Demo mode** | Swap Google Calendar for an in-memory mock — anyone can try the full chat → plan → approve → execute loop with zero setup. |
+| **Deterministic regression tests** | 6 end-to-end conversation cases run on every push via GitHub Actions, so behavior changes can't slip through silently. |
 
 ---
 
@@ -31,69 +24,69 @@ Demo state is shared and resets when the server restarts — it's for trying out
 
 ```
 User ↔ Streamlit (frontend/app.py)
-            │  HTTP (API_URL)
+            │  HTTP (API_URL, optional X-API-Key)
             ▼
        FastAPI (backend/app/main.py)
             │
    ┌────────┴─────────┐
-   │   Orchestrator     │  intent/entity detection → router → workflow
+   │   Orchestrator    │  intent/entity detection → router → workflow
    └────────┬─────────┘
             │
    ┌────────┴─────────┐
-   │      Agents        │  planner, prioritizer, execution (Groq LLM)
+   │      Agents       │  planner · prioritizer · execution (Groq LLM)
    └────────┬─────────┘
             │
    ┌────────┴─────────┐
-   │ Calendar Service   │  Google Calendar API  — or —  in-memory mock (DEMO_MODE)
-   └────────────────────┘
+   │ Calendar Service  │  Google Calendar API  — or —  in-memory mock (DEMO_MODE)
+   └───────────────────┘
 ```
 
-A HITL approval gate (`/execute` queues actions, `/approve` applies them) means the LLM never mutates your calendar directly — every create/reschedule/delete is queued and shown to the user first.
+![Architecture](docs/graphs/architecture.png)
+
+**Layout**
+- `backend/` — FastAPI app: agents (intent, entity, planner, prioritizer, execution), orchestrator (router, workflow, context builder), memory, and tests.
+- `frontend/` — Streamlit UI for chat and approvals.
+- `tools/` — helper scripts (architecture/regression graph generation).
 
 ---
 
 ## Local Setup
 
-### 1. Configure environment
+**1. Configure environment**
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env`:
-- `GROQ_API_KEY` — required, get one free at https://console.groq.com
-- `DEMO_MODE=true` — run with the mock calendar (no Google setup needed)
-- `DEMO_MODE=false` — use real Google Calendar (see below)
+Key variables:
+- `GROQ_API_KEY` — required; free key at https://console.groq.com
+- `DEMO_MODE=true` — run against the mock calendar (no Google setup)
+- `API_KEY` — set it to require an `X-API-Key` header on every endpoint (recommended for any non-local deployment)
+- `ALLOWED_ORIGINS` — comma-separated CORS allowlist (defaults to localhost)
 
-### 2. Real Google Calendar (DEMO_MODE=false)
+**2. Real Google Calendar** (`DEMO_MODE=false`)
 
 1. Create an OAuth client ID (Desktop app) in Google Cloud Console with the Calendar API enabled.
 2. Download it as `backend/credentials.json`.
-3. On first run, a browser window opens for you to log in; a `token.json` is saved for future runs.
+3. First run opens a browser to authorize; a `token.json` is saved for reuse.
 
-This OAuth flow is interactive/local-only and will not work on a headless cloud server — use `DEMO_MODE=true` for cloud deployments.
+This OAuth flow is interactive and local-only — it won't run on a headless cloud server. Use `DEMO_MODE=true` for cloud deployments.
 
-### 3. Run the backend
-
-```bash
-source venv39/bin/activate
-cd backend
-python -m uvicorn app.main:app --reload --app-dir .
-```
-
-### 4. Run the frontend
+**3. Run backend + frontend**
 
 ```bash
 source venv39/bin/activate
-cd frontend
-python -m streamlit run app.py
-```
 
-By default the frontend talks to `http://127.0.0.1:8000`. To point it at a different backend, set `API_URL` (env var or Streamlit secret).
+# backend → http://127.0.0.1:8000
+cd backend && python -m uvicorn app.main:app --reload --app-dir .
+
+# frontend → http://localhost:8501  (set API_URL to point elsewhere)
+cd frontend && python -m streamlit run app.py
+```
 
 ---
 
-## Tests / Regression
+## Tests
 
 ```bash
 source venv39/bin/activate
@@ -101,62 +94,29 @@ cd backend
 python -m app.testing.testing_chat_regression
 ```
 
-<<<<<<< HEAD
-Expected output: `Regression result: 6/6 passed`. This also runs automatically on every push/PR via GitHub Actions (`.github/workflows/ci.yml`).
-=======
->>>>>>> ec252c89913c5724a58ea64072e9a71db4c61f7c
+Expected: `Regression result: 6/6 passed`. The same suite runs on every push/PR via GitHub Actions (`.github/workflows/ci.yml`).
+
+![Regression results](docs/graphs/regression_results.png)
 
 ---
 
 ## Deployment
 
-### Docker (local / any container host)
+**Docker (any container host)**
 
 ```bash
 GROQ_API_KEY=your_key DEMO_MODE=true docker compose up --build
 ```
 
-This starts the backend on `:8000` and frontend on `:8501`.
+Backend on `:8000`, frontend on `:8501`.
 
-### Cloud (recommended split)
-
-- **Backend** → Render / Railway / Fly.io: deploy `backend/` (or use `backend/Dockerfile`), set `GROQ_API_KEY`, `DEMO_MODE=true`, and `ALLOWED_ORIGINS=https://<your-frontend-domain>`.
-- **Frontend** → Streamlit Community Cloud: deploy `frontend/app.py`, set the `API_URL` secret to your backend's public URL.
-
----
-
-## Project Notes & Next Steps
-- HITL approve/apply flow: `/execute` (queue) + `/approve` (apply).
-- Short-term session memory is file-backed; consider migrating to Redis for multi-instance deployments.
-- The repository targets Python 3.9 (`venv39`); Google libraries warn about 3.9 EOL — consider upgrading to 3.10+.
-- Demo mode state is in-memory and shared across all visitors of a deployment by design — fine for a portfolio demo, not for multi-tenant production use.
-
-## Generate README Graphs
-
-```bash
-source venv39/bin/activate
-python tools/generate_graphs.py
-```
-
-<<<<<<< HEAD
-Produces `docs/graphs/architecture.png` and `docs/graphs/regression_results.png`, referenced below.
-=======
-The images will be saved to `docs/graphs/architecture.png` and `docs/graphs/regression_results.png` and are referenced below.
-
-**Project Notes & Next Steps**
-- The code includes a HITL approve/apply flow: `/execute` (queue) + `/approve` (apply).
-- Short-term session memory is file-backed; consider migrating to Redis for multi-instance deployments.
-- The repository currently targets Python 3.9 in `venv39`; Google libraries warn about 3.9 EOL — consider upgrading to 3.10+ and adjusting `requirements.txt`.
-
-
->>>>>>> ec252c89913c5724a58ea64072e9a71db4c61f7c
+**Cloud (recommended split)**
+- **Backend** → Render / Railway / Fly.io: deploy `backend/` (or its `Dockerfile`); set `GROQ_API_KEY`, `DEMO_MODE`, `API_KEY`, and `ALLOWED_ORIGINS=https://<your-frontend-domain>`.
+- **Frontend** → Streamlit Community Cloud: deploy `frontend/app.py`; set the `API_URL` secret (and matching `X-API-Key`) to your backend.
 
 ---
 
-![Architecture](docs/graphs/architecture.png)
-
-![Regression results](docs/graphs/regression_results.png)
-<<<<<<< HEAD
-=======
-# agentic-calendar-system
->>>>>>> ec252c89913c5724a58ea64072e9a71db4c61f7c
+## Known limits
+- Session memory is file-backed — migrate to Redis for multi-instance deployments.
+- Demo state is in-memory and shared across all visitors by design (fine for a portfolio demo, not multi-tenant use).
+- Targets Python 3.9 (`venv39`); Google libraries warn about 3.9 EOL — upgrading to 3.10+ is recommended.
