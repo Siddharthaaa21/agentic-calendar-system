@@ -1,0 +1,51 @@
+# Build context is the repo root (docker build -f backend/Dockerfile .)
+# Keep images small and free of secrets / local state.
+
+# Version control & CI
+.git
+.github
+.gitignore
+
+# Secrets & local env (NEVER bake these into an image)
+.env
+.env.local
+backend/credentials.json
+backend/token.json
+backend/session.json
+backend/app/services/token.json
+secrets.json
+
+# Runtime / per-deployment state (regenerated at runtime)
+backend/app/memory/session_store.json
+backend/app/memory/store.json
+session.json
+memory_store.json
+*.db
+*.sqlite3
+
+# Python caches & virtualenvs
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+venv39/
+venv314/
+ENV/
+env/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Docs, graphs, tooling not needed at runtime
+docs/
+tools/
+*.md
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+.ipynb_checkpoints/
+*.log
+logs/
