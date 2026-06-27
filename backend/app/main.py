@@ -1,9 +1,11 @@
 import logging
 import os
+import secrets
 from typing import Any, Dict, List
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import APIKeyHeader
 from pydantic import BaseModel, Field
 
 from app.orchestrator.workflow import run_agentic_workflow
@@ -41,6 +43,29 @@ app.add_middleware(
 MAX_ACTIONS_PER_REQUEST = 25
 
 
+# ── Auth ────────────────────────────────────────────────────────────────────
+# Optional shared-secret auth. When API_KEY is set, every endpoint requires a
+# matching `X-API-Key` header. When it's unset (e.g. local dev / DEMO_MODE
+# public demo), the API stays open so visitors can try it freely.
+_API_KEY = os.getenv("API_KEY", "").strip()
+_api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+
+def require_api_key(provided: str = Security(_api_key_header)) -> None:
+    if not _API_KEY:
+        return  # auth disabled
+    # Constant-time compare to avoid leaking the key via timing.
+    if not provided or not secrets.compare_digest(provided, _API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+
+
+if not _API_KEY:
+    logger.warning(
+        "API_KEY is not set — the API is UNAUTHENTICATED. Set API_KEY in the "
+        "environment to require an X-API-Key header on every request."
+    )
+
+
 # ── Request models ────────────────────────────────────────────────────────────
 
 class ActionRequest(BaseModel):
@@ -57,7 +82,7 @@ def health():
 
 # ── Today pipeline ────────────────────────────────────────────────────────────
 
-@app.get("/today")
+@app.get("/today", dependencies=[Depends(require_api_key)])
 def today_events(session_id: str = "default"):
     """
     Full pipeline: fetch → structure → prioritize → detect conflicts → return.
@@ -113,7 +138,7 @@ def today_events(session_id: str = "default"):
 
 # ── Chat ──────────────────────────────────────────────────────────────────────
 
-@app.post("/chat")
+@app.post("/chat", dependencies=[Depends(require_api_key)])
 async def chat(req: dict):
     set_session(req.get("session_id", "default"))
     message = req.get("message", "").strip()
@@ -144,7 +169,7 @@ async def chat(req: dict):
 
 # ── Execute (queue actions) ───────────────────────────────────────────────────
 
-@app.post("/execute")
+@app.post("/execute", dependencies=[Depends(require_api_key)])
 def execute(payload: ActionRequest):
     set_session(payload.session_id)
     if len(payload.actions) > MAX_ACTIONS_PER_REQUEST:
@@ -160,7 +185,7 @@ def execute(payload: ActionRequest):
 
 # ── Approve (HITL gate) ───────────────────────────────────────────────────────
 
-@app.post("/approve")
+@app.post("/approve", dependencies=[Depends(require_api_key)])
 def approve(req: dict):
     set_session(req.get("session_id", "default"))
     if req.get("approval") != "yes":
