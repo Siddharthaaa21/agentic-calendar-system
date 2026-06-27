@@ -1,15 +1,33 @@
+# Axon — local/prod-ish orchestration of the FastAPI backend + Streamlit frontend.
+#   docker compose up --build
+# Reads variables from a local .env file (see .env.example).
+
 services:
   backend:
     build:
       context: .
       dockerfile: backend/Dockerfile
+    image: axon-backend
     ports:
       - "8000:8000"
     environment:
-      - GROQ_API_KEY=${GROQ_API_KEY}
+      - LLM_PROVIDER=${LLM_PROVIDER:-anthropic}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_MODEL=${GROQ_MODEL:-}
       - DEMO_MODE=${DEMO_MODE:-true}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-*}
-    # If running with DEMO_MODE=false, also mount your Google OAuth files:
+      - API_KEY=${API_KEY:-}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:8501,http://127.0.0.1:8501}
+      - APP_TIMEZONE=${APP_TIMEZONE:-UTC}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/').status==200 else sys.exit(1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    # For real Google Calendar (DEMO_MODE=false), mount pre-authorised OAuth files:
     #   volumes:
     #     - ./backend/credentials.json:/app/credentials.json:ro
     #     - ./backend/token.json:/app/token.json
@@ -18,9 +36,14 @@ services:
     build:
       context: .
       dockerfile: frontend/Dockerfile
+    image: axon-frontend
     ports:
       - "8501:8501"
     environment:
       - API_URL=http://backend:8000
+      # If the backend has API_KEY set, the frontend must send the same secret:
+      - API_KEY=${API_KEY:-}
+    restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
