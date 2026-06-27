@@ -1,6 +1,7 @@
 import time
 from datetime import datetime
 
+from app.core.session_context import current_session
 from app.services.calendar_service import get_today_events
 from app.tasks.scheduler import find_free_slot
 from app.memory.state_manager import load_preferences
@@ -10,30 +11,33 @@ from app.agents.planner_agent import structure_events
 from app.agents.prioritizer_agent import assign_priority
 
 # ---------------------------------------------------------------------------
-# Event cache: avoid hitting the Google Calendar API on every chat message
+# Event cache: avoid hitting the Google Calendar API on every chat message.
+# Keyed per session so one user's calendar never leaks into another user's
+# context/replies on a shared backend (real multi-user, non-demo mode).
 # ---------------------------------------------------------------------------
-_cache: dict = {"events": None, "ts": 0.0}
+_cache: dict = {}  # session_id -> {"events": list, "ts": float}
 _CACHE_TTL = 300  # seconds (5 minutes)
 
 
 def invalidate_event_cache() -> None:
     """Call this after a calendar mutation so the next request fetches fresh data."""
-    _cache["events"] = None
-    _cache["ts"] = 0.0
+    _cache.pop(current_session(), None)
 
 
 def _get_events() -> list:
     now = time.monotonic()
-    if _cache["events"] is None or (now - _cache["ts"]) > _CACHE_TTL:
+    session = current_session()
+    entry = _cache.get(session)
+    if entry is None or (now - entry["ts"]) > _CACHE_TTL:
         # Enrich + prioritize here too (not just in /today) so the chat path's
         # events carry a `priority` field. Without this, the high-priority
         # reschedule guard and the optimize/reschedule workflows can't see it.
         # Result is cached for _CACHE_TTL so the extra LLM calls don't run per
         # message.
         structured = structure_events(get_today_events())
-        _cache["events"] = validate_events(assign_priority(structured))
-        _cache["ts"] = now
-    return _cache["events"]
+        entry = {"events": validate_events(assign_priority(structured)), "ts": now}
+        _cache[session] = entry
+    return entry["events"]
 
 
 # ---------------------------------------------------------------------------

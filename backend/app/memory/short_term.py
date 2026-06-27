@@ -6,6 +6,8 @@ single `pending_actions` queue. The active session is read from
 """
 
 import json
+import os
+import tempfile
 import threading
 from pathlib import Path
 
@@ -29,12 +31,28 @@ def _read_all() -> dict:
         return {}
 
 
+def _atomic_write(payload: dict) -> None:
+    """Write JSON to a temp file in the same dir, then atomically rename it in.
+
+    os.replace is atomic on POSIX/Windows, so a crash mid-write can never leave
+    a truncated file that _read_all would silently treat as empty (wiping state).
+    """
+    fd, tmp = tempfile.mkstemp(dir=str(_SESSION_FILE.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=2)
+        os.replace(tmp, _SESSION_FILE)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
 def save_session(data: dict) -> None:
     with _lock:
         all_sessions = _read_all()
         all_sessions[current_session()] = data
-        with open(_SESSION_FILE, "w") as f:
-            json.dump(all_sessions, f, indent=2)
+        _atomic_write(all_sessions)
 
 
 def get_session() -> dict:

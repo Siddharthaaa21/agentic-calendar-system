@@ -14,8 +14,23 @@ logger = logging.getLogger(__name__)
 
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
-TOKEN_FILE = "token.json"
-CREDENTIALS_FILE = "credentials.json"
+# Resolve relative to this file (and overridable via env) so the token isn't
+# dropped into whatever the process CWD happens to be.
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TOKEN_FILE = os.getenv("GOOGLE_TOKEN_FILE", os.path.join(_BASE_DIR, "token.json"))
+CREDENTIALS_FILE = os.getenv("GOOGLE_CREDENTIALS_FILE", os.path.join(_BASE_DIR, "credentials.json"))
+
+
+def _write_token(creds) -> None:
+    """Persist OAuth creds with owner-only (0600) permissions.
+
+    The token holds a long-lived refresh token granting full calendar access,
+    so it must never be world/group readable. os.open with mode 0600 sets the
+    perms atomically at creation rather than chmod-ing after a default-perm
+    create (which leaves a brief readable window)."""
+    fd = os.open(TOKEN_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as token:
+        token.write(creds.to_json())
 
 
 # ---------------------------
@@ -30,8 +45,7 @@ def get_service():
     if creds and not creds.valid and creds.expired and creds.refresh_token:
         # Silently refresh — no browser needed.
         creds.refresh(Request())
-        with open(TOKEN_FILE, "w") as token:
-            token.write(creds.to_json())
+        _write_token(creds)
 
     if not creds or not creds.valid:
         # Interactive OAuth opens a browser and blocks — only safe to run
@@ -46,8 +60,7 @@ def get_service():
         )
         creds = flow.run_local_server(port=0)
 
-        with open(TOKEN_FILE, "w") as token:
-            token.write(creds.to_json())
+        _write_token(creds)
 
     return build("calendar", "v3", credentials=creds)
 
@@ -116,12 +129,14 @@ def cancel_event(event_id: str):
             "event_id": event_id
         }
 
-    except Exception as e:
+    except Exception:
         logger.exception("Cancel failed for event %s", event_id)
+        # Don't leak raw Google API error text (calendar/project ids, quota
+        # detail) to the client — the full exception is in the server log.
         return {
             "status": "FAILED",
             "event_id": event_id,
-            "error": str(e)
+            "error": "Couldn't cancel this event.",
         }
 
 
@@ -149,12 +164,12 @@ def reschedule_event(event_id: str, new_start: str, new_end: str):
 
         return normalize_event(updated_event)
 
-    except Exception as e:
+    except Exception:
         logger.exception("Reschedule failed for event %s", event_id)
         return {
             "status": "FAILED",
             "event_id": event_id,
-            "error": str(e)
+            "error": "Couldn't reschedule this event.",
         }
 
 
@@ -179,11 +194,11 @@ def create_event(title: str, start_time: str, end_time: str, description: str = 
         ).execute()
 
         return normalize_event(created)
-    except Exception as e:
+    except Exception:
         logger.exception("Create failed for event %s", title)
         return {
             "status": "FAILED",
-            "error": str(e),
+            "error": "Couldn't create this event.",
             "title": title,
         }
 
