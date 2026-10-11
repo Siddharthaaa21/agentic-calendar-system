@@ -1,4 +1,5 @@
 import re
+from datetime import datetime
 
 from app.orchestrator.context_builder import build_context, invalidate_event_cache
 from app.agents.intent_agent import detect_intent
@@ -12,9 +13,37 @@ from app.memory.short_term import get_session, save_session
 from app.agents.execution_agent import execute_actions
 
 
-def _normalize_response(payload: dict, intent: str) -> dict:
+def _format_time_short(t) -> str:
+    if not t:
+        return "N/A"
+    try:
+        dt = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+        return dt.strftime("%I:%M %p").lstrip("0")
+    except Exception:
+        return str(t)
+
+
+def _normalize_response(payload: dict, intent: str, trace_meta: dict = None) -> dict:
     payload = payload or {}
     actions = payload.get("actions") or []
+    trace_meta = trace_meta or {}
+
+    trace = payload.get("trace") or {
+        "intent": payload.get("intent", intent),
+        "intent_source": trace_meta.get("intent_source", "RULE_GRAPH"),
+        "entities": trace_meta.get("entities", {}),
+        "conflicts_detected": len(payload.get("conflicts", [])),
+        "workload_capacity": f"{payload.get('load_pct', 0)}% of 600m",
+        "focus_window": trace_meta.get("focus_slot") or "Available",
+        "hitl_gate": (
+            "MUTATION_INTERCEPTED (Approval Required)"
+            if actions
+            else trace_meta.get("hitl_gate", "READ_ONLY (Safe Query)")
+        ),
+        "actions_staged": len(actions),
+        "state_machine": trace_meta.get("state_machine", "ACTIVE"),
+    }
+
     return {
         "status": payload.get("status", "ok"),
         "reply": sanitize_output(payload.get("reply", "I can help with that.")),
@@ -25,6 +54,7 @@ def _normalize_response(payload: dict, intent: str) -> dict:
         "load_pct": payload.get("load_pct", 0),
         "requires_confirmation": bool(actions),
         "suggestions": payload.get("suggestions", []),
+        "trace": trace,
     }
 
 
@@ -58,7 +88,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
         response = _normalize_response({
             "reply": "Hey — I'm with you. Want a quick summary of today, or should I suggest what to move first?",
             "intent": "UNKNOWN",
-        }, "UNKNOWN")
+        }, "UNKNOWN", trace_meta={
+            "intent_source": "HEURISTIC_FILTER",
+            "state_machine": "IDLE",
+            "hitl_gate": "PASS_THROUGH (Safe Query)",
+        })
         append_turn("assistant", response["reply"])
         return response
 
@@ -66,7 +100,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
         response = _normalize_response({
             "reply": "Anytime — happy to help. Want me to keep optimizing the rest of your day?",
             "intent": "UNKNOWN",
-        }, "UNKNOWN")
+        }, "UNKNOWN", trace_meta={
+            "intent_source": "HEURISTIC_FILTER",
+            "state_machine": "IDLE",
+            "hitl_gate": "PASS_THROUGH (Safe Query)",
+        })
         append_turn("assistant", response["reply"])
         return response
 
@@ -74,7 +112,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
         response = _normalize_response({
             "reply": "Doing great — ready to plan with you. Should we review your current load or tweak your schedule?",
             "intent": "UNKNOWN",
-        }, "UNKNOWN")
+        }, "UNKNOWN", trace_meta={
+            "intent_source": "HEURISTIC_FILTER",
+            "state_machine": "IDLE",
+            "hitl_gate": "PASS_THROUGH (Safe Query)",
+        })
         append_turn("assistant", response["reply"])
         return response
 
@@ -99,7 +141,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
             response = _normalize_response({
                 "reply": "No problem — let me know if you'd like to add something else.",
                 "intent": "CREATE_EVENT",
-            }, "CREATE_EVENT")
+            }, "CREATE_EVENT", trace_meta={
+                "intent_source": "MULTI_TURN_FSM",
+                "state_machine": "DRAFT_CANCELLED",
+                "hitl_gate": "PASS_THROUGH (Safe Query)",
+            })
             append_turn("assistant", response["reply"])
             return response
 
@@ -119,12 +165,21 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
                         "new_time": t,
                         "detail": f"Create event at {t}",
                     }],
-                }, "CREATE_EVENT")
+                }, "CREATE_EVENT", trace_meta={
+                    "intent_source": "MULTI_TURN_FSM",
+                    "entities": {"title": candidate_clean, "time": t},
+                    "state_machine": "STAGED_CREATE",
+                })
             else:
                 response = _normalize_response({
                     "reply": f"Got it. What time should I schedule **{candidate_clean}**?",
                     "intent": "CREATE_EVENT",
-                }, "CREATE_EVENT")
+                }, "CREATE_EVENT", trace_meta={
+                    "intent_source": "MULTI_TURN_FSM",
+                    "entities": {"title": candidate_clean},
+                    "state_machine": "AWAITING_TIME_SLOT",
+                    "hitl_gate": "AWAITING_INPUT (Zero writes)",
+                })
             _persist_pending(response)
             append_turn("assistant", response["reply"])
             return response
@@ -153,7 +208,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
                 "new_time": t,
                 "detail": f"Create event at {t}",
             }],
-        }, "CREATE_EVENT")
+        }, "CREATE_EVENT", trace_meta={
+            "intent_source": "MULTI_TURN_FSM",
+            "entities": {"title": title, "time": t},
+            "state_machine": "STAGED_CREATE",
+        })
         _persist_pending(response)
         append_turn("assistant", response["reply"])
         return response
@@ -163,7 +222,12 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
         response = _normalize_response({
             "reply": f"Got it. What time should I schedule **{draft_create['title']}**?",
             "intent": "CREATE_EVENT",
-        }, "CREATE_EVENT")
+        }, "CREATE_EVENT", trace_meta={
+            "intent_source": "MULTI_TURN_FSM",
+            "entities": {"title": draft_create["title"]},
+            "state_machine": "AWAITING_TIME_SLOT",
+            "hitl_gate": "AWAITING_INPUT (Zero writes)",
+        })
         append_turn("assistant", response["reply"])
         return response
 
@@ -184,7 +248,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
             "reply": f"Perfect — I can move **{title}** to {t}. Approve when you're ready.",
             "intent": "RESCHEDULE_EVENT",
             "actions": [action],
-        }, "RESCHEDULE_EVENT")
+        }, "RESCHEDULE_EVENT", trace_meta={
+            "intent_source": "MULTI_TURN_FSM",
+            "entities": {"title": title, "new_time": t},
+            "state_machine": "STAGED_RESCHEDULE",
+        })
         _persist_pending(response)
         append_turn("assistant", response["reply"])
         return response
@@ -242,12 +310,21 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
                         "start": slot["start"],
                         "end": slot["end"],
                     }],
-                }, "CREATE_EVENT")
+                }, "CREATE_EVENT", trace_meta={
+                    "intent_source": "FOCUS_SLOT_INFERENCE",
+                    "entities": {"title": title, "slot": f"{slot['start']}–{slot['end']}"},
+                    "state_machine": "STAGED_CREATE",
+                })
             else:
                 response = _normalize_response({
                     "reply": f"Sure — I can use your {slot['start']}–{slot['end']} window. What should I call the event?",
                     "intent": "CREATE_EVENT",
-                }, "CREATE_EVENT")
+                }, "CREATE_EVENT", trace_meta={
+                    "intent_source": "FOCUS_SLOT_INFERENCE",
+                    "entities": {"slot": f"{slot['start']}–{slot['end']}"},
+                    "state_machine": "AWAITING_TITLE",
+                    "hitl_gate": "AWAITING_INPUT (Zero writes)",
+                })
                 save_memory("awaiting_event_title", True)
             _persist_pending(response)
             append_turn("assistant", response["reply"])
@@ -283,7 +360,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
                 "events": context.get("events", []),
                 "conflicts": context.get("conflicts", []),
                 "load_pct": context.get("load_pct", 0),
-            }, intent)
+            }, intent, trace_meta={
+                "intent_source": "HITL_HUMAN_GATE",
+                "state_machine": "NOTHING_PENDING",
+                "hitl_gate": "SAFE_PASS (Zero writes)",
+            })
         else:
             results = execute_actions(pending)
             session["pending_actions"] = []
@@ -302,7 +383,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
                 "conflicts": context.get("conflicts", []),
                 "load_pct": context.get("load_pct", 0),
                 "suggestions": ["Say 'show conflicts' to review any remaining issues."],
-            }, intent)
+            }, intent, trace_meta={
+                "intent_source": "HITL_HUMAN_GATE",
+                "state_machine": "EXECUTED_COMMITTED",
+                "hitl_gate": f"EXECUTED ({len(pending)} mutations committed)",
+            })
         response["reply"] = style_reply(response["reply"], context, intent=intent)
         append_turn("assistant", response["reply"])
         return response
@@ -317,7 +402,11 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
             "events": context.get("events", []),
             "conflicts": context.get("conflicts", []),
             "load_pct": context.get("load_pct", 0),
-        }, intent)
+        }, intent, trace_meta={
+            "intent_source": "HITL_HUMAN_GATE",
+            "state_machine": "DISCARDED",
+            "hitl_gate": "DISCARDED (Zero writes)",
+        })
         response["reply"] = style_reply(response["reply"], context, intent=intent)
         append_turn("assistant", response["reply"])
         return response
@@ -340,7 +429,22 @@ def run_agentic_workflow(message: str, conversation_history: list = None) -> dic
         session["pending_actions"] = response["actions"]
         save_session(session)
 
-    response = _normalize_response(response, intent)
+    free_slot = context.get("free_slot")
+    if isinstance(free_slot, (list, tuple)) and len(free_slot) >= 2:
+        slot_str = f"{_format_time_short(free_slot[0])} – {_format_time_short(free_slot[1])}"
+    else:
+        slot_str = "None available"
+
+    trace_meta = {
+        "intent_source": (
+            "RULE_GRAPH" if intent_data.get("source") == "RULE" else "LLM_SEMANTIC"
+        ),
+        "entities": {k: v for k, v in entities.items() if v},
+        "focus_slot": slot_str,
+        "state_machine": "DISPATCHED_TO_WORKFLOW",
+    }
+
+    response = _normalize_response(response, intent, trace_meta=trace_meta)
     response["reply"] = style_reply(response.get("reply", ""), context, intent=intent)
     append_turn("assistant", response["reply"])
     return response
