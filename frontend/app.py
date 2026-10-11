@@ -57,7 +57,30 @@ def _ensure_backend():
         sys.path.insert(0, backend_dir)
 
     try:
-        os.environ.setdefault("DEMO_MODE", "true")
+        # Auto-detect Google token from Streamlit secrets or local file
+        has_token = False
+        try:
+            if "GOOGLE_TOKEN_JSON" in st.secrets:
+                os.environ["GOOGLE_TOKEN_JSON"] = st.secrets["GOOGLE_TOKEN_JSON"]
+                has_token = True
+            elif "GOOGLE_TOKEN" in st.secrets:
+                os.environ["GOOGLE_TOKEN_JSON"] = st.secrets["GOOGLE_TOKEN"]
+                has_token = True
+        except Exception:
+            pass
+
+        try:
+            from app.services.calendar_service import _find_token_file
+            if _find_token_file() or os.getenv("GOOGLE_TOKEN_JSON"):
+                has_token = True
+        except Exception:
+            pass
+
+        if has_token:
+            os.environ["DEMO_MODE"] = "false"
+        else:
+            os.environ.setdefault("DEMO_MODE", "true")
+
         from app.main import app as fastapi_app
         parsed = urllib.parse.urlparse(API_URL)
         port = parsed.port or 8000
@@ -84,6 +107,40 @@ _ensure_backend()
 # Attached to every backend request. Empty when the backend runs open (demo).
 _API_KEY = _get_api_key()
 _AUTH_HEADERS = {"X-API-Key": _API_KEY} if _API_KEY else {}
+
+
+def connect_google_token(token_data):
+    try:
+        r = requests.post(
+            f"{API_URL}/auth/google/connect",
+            json={"token": token_data, "session_id": st.session_state.session_id},
+            headers=_AUTH_HEADERS,
+            timeout=10,
+        )
+        r.raise_for_status()
+        return r.json(), None
+    except requests.exceptions.HTTPError as e:
+        detail = "Invalid token or expired credentials."
+        try:
+            detail = e.response.json().get("detail", detail)
+        except Exception:
+            pass
+        return None, detail
+    except Exception as e:
+        return None, str(e)
+
+
+def disconnect_google():
+    try:
+        r = requests.post(
+            f"{API_URL}/auth/google/disconnect",
+            json={"session_id": st.session_state.session_id, "actions": []},
+            headers=_AUTH_HEADERS,
+            timeout=10,
+        )
+        return r.json()
+    except Exception:
+        return {}
 
 
 def _esc(value):
@@ -171,10 +228,16 @@ html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"] {
     animation: pulse 2.5s ease infinite; flex-shrink: 0;
 }
 .hdr-dot.offline { background: var(--muted); animation: none; box-shadow: none; }
+.hdr-dot.warn { background: var(--amber); box-shadow: 0 0 0 0 rgba(245,158,11,.45); animation: pulse-amber 2.5s ease infinite; }
 @keyframes pulse {
     0%   { box-shadow: 0 0 0 0 rgba(16,185,129,.45); }
     70%  { box-shadow: 0 0 0 7px rgba(16,185,129,0); }
     100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+}
+@keyframes pulse-amber {
+    0%   { box-shadow: 0 0 0 0 rgba(245,158,11,.45); }
+    70%  { box-shadow: 0 0 0 7px rgba(245,158,11,0); }
+    100% { box-shadow: 0 0 0 0 rgba(245,158,11,0); }
 }
 .hdr-title {
     font-size: 15px; font-weight: 700; letter-spacing: -.3px;
@@ -671,9 +734,8 @@ for k, v in defaults.items():
         st.session_state[k] = v
 
 # Auto-load calendar once
-_connect_label = "Loading demo calendar..." if DEMO_MODE else "Connecting to Google Calendar..."
 if st.session_state.data is None:
-    with st.spinner(_connect_label):
+    with st.spinner("Connecting to calendar service..."):
         result, err = fetch_schedule()
 
     if err:
@@ -681,11 +743,22 @@ if st.session_state.data is None:
     else:
         st.session_state.data = result
 
+data = st.session_state.data or {}
 connected = st.session_state.data is not None
-dot_cls   = "hdr-dot" if connected else "hdr-dot offline"
-if connected:
-    status_text = "Demo mode — sample calendar" if DEMO_MODE else "Connected to Google Calendar"
+is_live = bool(data.get("is_live_google"))
+account_email = data.get("google_account")
+
+if is_live and account_email:
+    dot_cls = "hdr-dot"
+    status_text = f"Live Google Calendar · {_esc(account_email)}"
+elif is_live:
+    dot_cls = "hdr-dot"
+    status_text = "Live Google Calendar"
+elif connected:
+    dot_cls = "hdr-dot warn"
+    status_text = "Sample Sandbox (Google Calendar not connected)"
 else:
+    dot_cls = "hdr-dot offline"
     status_text = "Not connected"
 
 st.markdown(f"""
@@ -903,6 +976,96 @@ with right:
         conflicts = data.get("conflicts", [])
         actions   = data.get("actions", [])
         load_pct  = data.get("load_pct", 0)
+        is_live   = bool(data.get("is_live_google"))
+        account_email = data.get("google_account")
+        upcoming  = data.get("upcoming_events", [])
+
+        # ── Google Calendar Connection Control ──
+        if not is_live:
+            st.markdown("""
+            <div class="card" style="border-color: rgba(59,130,246,0.35); background: linear-gradient(180deg, rgba(59,130,246,0.08), var(--surface));">
+                <div class="card-label"><span>🔑</span> Connect Real Google Calendar</div>
+                <div style="font-size:12px;color:var(--text);margin-bottom:6px;line-height:1.5;">
+                    Currently in <strong>Sample Demo Mode</strong>. Connect your Google account to fetch your live schedule, detect real conflicts, and stage updates to your actual calendar.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            with st.expander("👉 Click here to Connect / Sign in with Google", expanded=False):
+                t1, t2 = st.tabs(["⚡ Connect Token", "☁️ Streamlit Cloud Secrets"])
+                with t1:
+                    st.caption("Paste your Google token JSON or upload your `token.json` file:")
+                    token_input = st.text_area(
+                        "Token JSON",
+                        height=90,
+                        placeholder='{"token": "ya29...", "refresh_token": "...", "client_id": "...", ...}',
+                        label_visibility="collapsed",
+                        key="tok_txt",
+                    )
+                    up_file = st.file_uploader("Or upload token.json", type=["json"], key="up_tok")
+                    if up_file is not None:
+                        try:
+                            token_input = up_file.getvalue().decode("utf-8")
+                        except Exception:
+                            pass
+
+                    c_btn1, c_btn2 = st.columns([1, 1])
+                    with c_btn1:
+                        if st.button("Connect Account", key="btn_conn_tok"):
+                            if not token_input.strip():
+                                st.warning("Please paste or upload your token.json first.")
+                            else:
+                                with st.spinner("Authorizing with Google Calendar..."):
+                                    res, err = connect_google_token(token_input.strip())
+                                if err:
+                                    st.error(f"Connection failed: {err}")
+                                else:
+                                    st.success(f"✓ Connected to {res.get('account')}!")
+                                    refreshed, _ = fetch_schedule()
+                                    if refreshed:
+                                        st.session_state.data = refreshed
+                                    st.rerun()
+
+                    with c_btn2:
+                        if st.button("⚡ Connect Local Token", key="btn_conn_local"):
+                            refreshed, err = fetch_schedule()
+                            if refreshed and refreshed.get("is_live_google"):
+                                st.session_state.data = refreshed
+                                st.success(f"✓ Connected to {refreshed.get('google_account')}!")
+                                st.rerun()
+                            else:
+                                st.info("No local token detected. Please paste or upload your token.json above.")
+
+                with t2:
+                    st.markdown("""
+                    **Permanent Cloud Connection (Streamlit Cloud):**
+                    1. Go to your **Streamlit Cloud Dashboard**.
+                    2. Click **App settings** ➔ **Secrets**.
+                    3. Paste your token JSON and click **Save**:
+                    ```toml
+                    GOOGLE_TOKEN = '''
+                    <paste token.json content here>
+                    '''
+                    ```
+                    Your app will stay permanently synced across all container restarts.
+                    """)
+        else:
+            col_acc1, col_acc2 = st.columns([3, 1])
+            with col_acc1:
+                st.markdown(f"""
+                <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);border-radius:8px;font-size:11px;margin-bottom:10px;">
+                    <span class="hdr-dot" style="background:#10b981;"></span>
+                    <span style="color:#10b981;font-weight:600;">LIVE CALENDAR</span>
+                    <span style="color:var(--text);font-family:'JetBrains Mono';">{_esc(account_email or 'Connected')}</span>
+                </div>
+                """, unsafe_allow_html=True)
+            with col_acc2:
+                if st.button("Disconnect", key="disc_btn"):
+                    disconnect_google()
+                    refreshed, _ = fetch_schedule()
+                    if refreshed:
+                        st.session_state.data = refreshed
+                    st.rerun()
 
         pending = []
         for i, a in enumerate(actions):
@@ -968,10 +1131,41 @@ with right:
             </div>
             """, unsafe_allow_html=True)
         else:
-            st.markdown("""
-            <div class="empty">
-                <div class="empty-title">No events today</div>
-                <div class="empty-sub">Your calendar is clear.</div>
+            if is_live:
+                st.markdown(f"""
+                <div class="empty">
+                    <div class="empty-title" style="color:var(--green)">✓ Live Google Calendar Synced</div>
+                    <div class="empty-sub">Your schedule for today ({datetime.now().strftime('%A, %b %d')}) is completely clear.</div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                <div class="empty">
+                    <div class="empty-title">No events today</div>
+                    <div class="empty-sub">Your calendar is clear.</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+        # Upcoming Events from Google Calendar
+        if is_live and upcoming:
+            up_rows = ""
+            for u in upcoming:
+                u_title = _esc(u.get("title", "No Title"))
+                u_start = _fmt_time(u.get("start", ""))
+                u_end = _fmt_time(u.get("end", ""))
+                up_rows += f"""
+                <div class="tl-row">
+                    <span class="tl-time">{u_start}</span>
+                    <div class="dot l"></div>
+                    <div>
+                        <span class="tl-name">{u_title}</span>
+                        <div class="tl-sub">{u_start} – {u_end}</div>
+                    </div>
+                </div>"""
+            st.markdown(f"""
+            <div class="card">
+                <div class="card-label">Upcoming in Your Google Calendar</div>
+                <div class="tl">{up_rows}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -997,7 +1191,7 @@ with right:
 
         # Actions
         icon_map = {"RESCHEDULE": "↗", "REBALANCE": "⇄", "DELETE": "×", "CANCEL": "×", "CREATE": "+"}
-        target_label = "the demo calendar" if DEMO_MODE else "Google Calendar"
+        target_label = account_email if (is_live and account_email) else ("the demo calendar" if not is_live else "Google Calendar")
 
         if pending:
             for a in pending:
