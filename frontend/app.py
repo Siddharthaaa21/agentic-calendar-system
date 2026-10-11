@@ -28,6 +28,53 @@ def _get_api_key():
 API_URL = _get_api_url()
 DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
+
+def _ensure_backend():
+    """Auto-start embedded backend when running on localhost / single-container clouds (e.g. Streamlit Cloud)."""
+    if "127.0.0.1" not in API_URL and "localhost" not in API_URL:
+        return
+    try:
+        r = requests.get(f"{API_URL}/", timeout=1)
+        if r.status_code == 200:
+            return
+    except Exception:
+        pass
+
+    import sys
+    import threading
+    import time
+    import urllib.parse
+    import uvicorn
+
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+
+    try:
+        os.environ.setdefault("DEMO_MODE", "true")
+        from app.main import app as fastapi_app
+        parsed = urllib.parse.urlparse(API_URL)
+        port = parsed.port or 8000
+
+        def _serve():
+            uvicorn.run(fastapi_app, host="127.0.0.1", port=port, log_level="warning")
+
+        t = threading.Thread(target=_serve, daemon=True)
+        t.start()
+        for _ in range(25):
+            time.sleep(0.2)
+            try:
+                r = requests.get(f"{API_URL}/", timeout=1)
+                if r.status_code == 200:
+                    break
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+_ensure_backend()
+
 # Attached to every backend request. Empty when the backend runs open (demo).
 _API_KEY = _get_api_key()
 _AUTH_HEADERS = {"X-API-Key": _API_KEY} if _API_KEY else {}
