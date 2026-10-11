@@ -1,76 +1,131 @@
 # Axon — Agentic Calendar System
 
-[![CI](https://github.com/Siddharthaaa21/agentic-calendar-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Siddharthaaa21/agentic-calendar-system/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.128-green.svg)](https://fastapi.tiangolo.com)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.50-red.svg)](https://streamlit.io)
+A deterministic, human-in-the-loop (HITL) multi-agent system that manages Google Calendar through natural language. It interprets conversational intent, balances daily workload, detects scheduling conflicts, discovers deep-work focus slots, and stages mutations — but **enforces a strict separation between planning and execution**. The LLM can propose calendar mutations, but can never commit them without explicit user authorization.
 
-A conversational AI assistant that manages your Google Calendar in plain English. It understands intent, structures and prioritizes your day, detects scheduling conflicts, finds deep-work focus slots, and proposes create / reschedule / delete actions — but **never touches your real calendar without explicit approval**, thanks to a human-in-the-loop (HITL) gate.
-
-Built with a **FastAPI** backend, a **Streamlit** frontend, and interchangeable LLM reasoning powered by **Groq (Llama 3.1)** or **Anthropic (Claude)** with robust hybrid rule fallbacks.
-
-> **Try it:** `"what's for today"` · `"show conflicts"` · `"free slots"` · `"move gym to 8pm"` · `"delete lunch"`
+Supports both **Groq (Llama 3.1)** and **Anthropic (Claude)** with robust rule-based fallbacks that keep the system operable even when external LLM providers are rate-limited or offline.
 
 ---
 
-## Why it's built this way
+## Interface
 
-| Design choice | What it buys you |
-|---|---|
-| **HITL approval gate** (`/execute` queues, `/approve` applies) | The LLM can *propose* but never *commit*. Every mutation is presented to the user before it reaches the calendar — eliminating silent, hallucinated edits. |
-| **Multi-agent pipeline** | Intent detection, entity extraction, planning, prioritization, and execution are separate, testable agents instead of a fragile monolithic prompt. |
-| **Hybrid fallback resilience** | Deterministic regex rules and template formatters ensure schedule queries, conflicts, and approvals remain operable even during LLM provider rate limits or outages. |
-| **Optional API-key auth** | Mutation endpoints are secured behind an `X-API-Key` header with constant-time comparison, plus fail-closed startup warnings when running against live calendars. |
-| **Zero-setup demo mode** | Run against an in-memory mock calendar (`DEMO_MODE=true`) — anyone can test the full chat → plan → approve → execute loop with zero Google Cloud configuration. |
-| **Deterministic regression suite** | 8 end-to-end multi-turn conversation test cases run on every push via GitHub Actions to prevent regressions. |
+![Axon Dashboard & Chat Interface](docs/graphs/ui_preview.jpg)
+
+The interface splits into two coordinated views:
+- **Left (Conversational HITL Agent):** Multi-turn chat where users state objectives in plain English. Proposed actions are rendered as interactive staging cards with one-click **Approve** and **Reject** buttons.
+- **Right (Real-Time Schedule Dashboard):** Live timeline of today's events, color-coded priority badges, automated overlap conflict warnings, and a cognitive workload gauge (`load_pct`).
 
 ---
 
-## Architecture
+## Architectural Philosophy & Core Invariants
+
+Traditional LLM assistants fail on calendar management because single-prompt approaches hallucinate times, clobber existing meetings, and silently mutate external state. Axon enforces five architectural invariants:
+
+1. **Strict HITL Gate (Propose vs. Commit):** The LLM pipeline only produces mutation *payloads* (`CREATE`, `RESCHEDULE`, `DELETE`), which are staged in session memory. Execution occurs solely via the `/approve` endpoint when the human confirms.
+2. **Rules-First, Model-Second:** Deterministic regex engines and heuristic matchers resolve common operations (affirmations, rejections, time offsets, simple verbs) with zero latency and zero LLM cost. The LLM is invoked only for semantic ambiguity.
+3. **Batch Over Single-Item Calls:** When classifying or prioritizing today's events, the planner processes the entire schedule in a single batched prompt instead of making $N$ round-trips.
+4. **State Machine Durability:** Multi-turn slot filling (e.g. "Add a team sync" $\rightarrow$ "At 3pm") survives across turns via draft state memory and persistence guarantees.
+5. **Fail-Closed Security:** Against a real Google Calendar (`DEMO_MODE=false`), the backend refuses to start without an `API_KEY` configured.
+
+---
+
+## System Architecture
 
 ```
-User ↔ Streamlit (frontend/app.py)
-            │  HTTP (API_URL, optional X-API-Key)
-            ▼
-       FastAPI (backend/app/main.py)
-            │
-   ┌────────┴─────────┐
-   │   Orchestrator    │  intent/entity detection → router → workflow
-   └────────┬─────────┘
-            │
-   ┌────────┴─────────┐
-   │      Agents       │  planner · prioritizer · execution (Groq / Anthropic)
-   └────────┬─────────┘
-            │
-   ┌────────┴─────────┐
-   │ Calendar Service  │  Google Calendar API  — or —  in-memory mock (DEMO_MODE)
-   └───────────────────┘
+User ↔ Streamlit Frontend (frontend/app.py)
+              │
+              │  HTTP JSON (/today, /chat, /execute, /approve)
+              │  Optional Header: X-API-Key
+              ▼
+         FastAPI Backend (backend/app/main.py)
+              │
+    ┌─────────┴─────────┐
+    │   Orchestrator    │  Fast-Path Filter → State Machine → Context Builder
+    └─────────┬─────────┘
+              │
+    ┌─────────┴─────────┐
+    │  Agent Pipeline   │
+    │  ├─ Intent Agent  │  Hybrid Regex / Fallback LLM (11 intent classes)
+    │  ├─ Entity Agent  │  Regex Time/Title Extraction + Gap-Fill LLM
+    │  ├─ Planner Agent │  Batch Schema Enrichment & Classification
+    │  └─ Prioritizer   │  Workload Scorer & High/Med/Low Assignment
+    └─────────┬─────────┘
+              │
+    ┌─────────┴─────────┐
+    │   HITL Gate       │  Stages actions to pending_actions session store
+    └─────────┬─────────┘
+              │
+    ┌─────────┴─────────┐
+    │  Calendar Service │  Google Calendar API  — or —  Mock Service (DEMO_MODE)
+    └───────────────────┘
 ```
 
-![Architecture](docs/graphs/architecture.png)
-
-For an in-depth walkthrough of data flow, state management, and guardrails, see the [Architecture Guide](docs/ARCHITECTURE.md).
-
-**Repository Layout**
-- `backend/` — FastAPI app: agents (intent, entity, planner, prioritizer, execution), orchestrator (router, workflow, context builder), memory stores, and test suites.
-- `frontend/` — Streamlit web interface with real-time schedule inspection, conflict highlighting, and approval cards.
-- `docs/` — Architecture documentation and visual workflows.
-- `tools/` — Helper utilities for asset and graph generation.
+Detailed architectural diagrams and implementation notes are available in the [Architecture Guide](docs/ARCHITECTURE.md).
 
 ---
 
-## Local Setup
+## Multi-Agent Pipeline Mechanics
 
-### 1. Prerequisites & Environment
+Instead of relying on an unpredictable monolithic agent, Axon delegates reasoning across five specialized agents:
 
-Clone the repository and create a Python virtual environment:
+| Agent | Module | Input $\rightarrow$ Output | Strategy & Fallback |
+|---|---|---|---|
+| **Intent Agent** | [`intent_agent.py`](backend/app/agents/intent_agent.py) | Message + Context $\rightarrow$ Intent Tag | **Rules First:** Evaluates 11 deterministic regex patterns and verb prefixes (`GET_TODAY`, `CREATE_EVENT`, `RESCHEDULE_EVENT`, `DELETE_EVENT`, `SHOW_CONFLICTS`, `OPTIMIZE_DAY`, `APPROVE_ACTIONS`, `REJECT_ACTIONS`, etc.). Falls back to structured LLM prompt only when no rule fires. |
+| **Entity Agent** | [`entity_agent.py`](backend/app/agents/entity_agent.py) | Message + Context $\rightarrow$ `{event_title, time}` | **Hybrid Extraction:** Regex extracts standardized and bare times (`"8pm"`, `"at 3"` $\rightarrow$ `3:00 PM`), while title patterns isolate target events. LLM gap-fills missing context. Both pass through strict validation blocks (`_validate_title`, `_validate_time`). |
+| **Planner Agent** | [`planner_agent.py`](backend/app/agents/planner_agent.py) | Raw Calendar Events $\rightarrow$ Normalized Events | Normalizes raw Google Calendar JSON into typed domain objects with parsed UTC bounds, duration, and default metadata. Executes batched schema enrichment. |
+| **Prioritizer Agent** | [`prioritizer_agent.py`](backend/app/agents/prioritizer_agent.py) | Normalized Events $\rightarrow$ Prioritized Events | Computes daily workload saturation (`load_pct`) relative to a 10-hour (600 min) workday. Applies deterministic keyword rules (e.g. `"interview"`, `"presentation"` $\rightarrow$ `HIGH`) before invoking model ranking. |
+| **Execution Agent** | [`execution_agent.py`](backend/app/agents/execution_agent.py) | Approved Actions $\rightarrow$ Mutation Results | Pure deterministic executor. Never touches LLMs. Applies authenticated mutations (`insert`, `patch`, `delete`) to the calendar service. |
+
+---
+
+## State Machine & Multi-Turn Context
+
+Axon handles complex conversational state across multiple turns without losing context:
+
+```
+Turn 1: "Add a meeting called Project Sync"
+  └─ Intent: CREATE_EVENT | Entities: title="Project Sync", time=None
+  └─ State Machine: saves {title: "Project Sync"} to draft_create_event
+  └─ Reply: "What time would you like to schedule Project Sync?"
+
+Turn 2: "at 4pm"
+  └─ Intent: CREATE_EVENT (via multi-turn resolver) | Entities: time="4:00 PM"
+  └─ Merge: combines draft title + new time
+  └─ Orchestrator: generates staged action [{action: "create", title: "Project Sync", start: "..."}]
+  └─ Reply: "I can create Project Sync at 4:00 PM. Approve when you're ready."
+  └─ Persistence: _persist_pending() guarantees action is saved to pending_actions
+
+Turn 3: "yes" / [Approve Button]
+  └─ Intent: APPROVE_ACTIONS
+  └─ Execution Agent: commits event to Calendar API
+  └─ Cache: calls invalidate_event_cache() to refresh dashboard view
+```
+
+### Contextual Fast-Paths & Protections
+- **Small-Talk Fast Paths:** Casual phrases (`"hi"`, `"thanks"`, `"how are you"`) match compiled regex guards to return immediate conversational responses, skipping context construction.
+- **Slot Filling:** Asking `"free slots"` locates open focus windows; follow-up queries like `"put focus time in that slot"` automatically bind the calculated time range.
+- **High-Priority Safeguard:** The router rejects reschedule proposals on events marked `priority == "high"`, protecting critical appointments from accidental movement.
+
+---
+
+## Guardrails & Security Architecture
+
+- **Fail-Closed Authentication:** Set `API_KEY` to require an `X-API-Key` header on all mutation endpoints. If `DEMO_MODE=false` (live Google Calendar) and `API_KEY` is omitted, the server **aborts boot** to prevent exposing open mutation endpoints.
+- **Constant-Time Verification:** API key authentication uses `secrets.compare_digest` to prevent timing attacks.
+- **Action Batch Quotas:** `MAX_ACTIONS_PER_REQUEST = 25` prevents accidental or malicious quota exhaustion on the Google Calendar API.
+- **XSS & Prompt Injection Defenses:** Dynamic event titles and user inputs are strictly escaped via `html.escape()` before interpolation into the UI. Assistant replies pass through `sanitize_output()` to strip control characters and delimiter injection.
+- **Isolated Session Memory:** Requests bind a per-session UUID via `set_session()`, isolating conversation history and pending action queues across multiple users.
+
+---
+
+## Quickstart
+
+### 1. Setup Virtual Environment
 
 ```bash
 git clone https://github.com/Siddharthaaa21/agentic-calendar-system.git
 cd agentic-calendar-system
 
-# Create and activate a virtual environment (Python 3.9+)
+# Create virtual environment (Python 3.9+)
 python3 -m venv venv
 source venv/bin/activate
 
@@ -78,108 +133,106 @@ source venv/bin/activate
 pip install -r backend/requirements.txt
 ```
 
-### 2. Configure Environment Variables
+### 2. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Key environment variables:
-- `LLM_PROVIDER` — `groq` or `anthropic` (default: `anthropic`)
-- `GROQ_API_KEY` — Required if using Groq (free at [console.groq.com](https://console.groq.com))
-- `ANTHROPIC_API_KEY` — Required if using Anthropic ([console.anthropic.com](https://console.anthropic.com))
-- `DEMO_MODE=true` — Run against the mock calendar (recommended for instant local testing without Google credentials)
-- `API_KEY` — Optional shared secret requiring an `X-API-Key` header on all mutation endpoints
-- `ALLOWED_ORIGINS` — Comma-separated CORS allowlist (defaults to `http://localhost:8501,http://127.0.0.1:8501`)
+Set key values in `.env`:
+```ini
+LLM_PROVIDER=groq                     # "groq" or "anthropic"
+GROQ_API_KEY=gsk_your_groq_key        # Free at console.groq.com
+# ANTHROPIC_API_KEY=sk-ant-your_key  # Optional Anthropic key
+DEMO_MODE=true                        # true = mock calendar (no Google setup)
+```
 
-### 3. Connect Real Google Calendar (Optional, `DEMO_MODE=false`)
+### 3. Run Locally
 
-1. Create an OAuth 2.0 Client ID (Desktop Application) in the [Google Cloud Console](https://console.cloud.google.com/) with the **Google Calendar API** enabled.
-2. Download the client secret JSON file and save it as `backend/credentials.json`.
-3. Set `DEMO_MODE=false` and `ALLOW_INTERACTIVE_AUTH=true` in your `.env`.
-4. The first backend launch opens a browser to grant calendar permissions; an authorized `backend/token.json` is saved locally for future runs.
-
-### 4. Run the Application
-
-In separate terminal windows with your virtual environment activated:
+In separate terminal windows:
 
 ```bash
-# Terminal 1: Backend API → http://127.0.0.1:8000
+# Terminal 1: FastAPI Backend -> http://127.0.0.1:8000
 cd backend
 python -m uvicorn app.main:app --reload
 
-# Terminal 2: Frontend Web UI → http://localhost:8501
+# Terminal 2: Streamlit UI -> http://localhost:8501
 cd frontend
 streamlit run app.py
 ```
 
 ---
 
-## Testing
+## Testing & CI Verification
 
-Run the deterministic regression suite (executes against the mock calendar, zero external credentials required):
+Axon includes a deterministic regression test suite covering all multi-turn dialogue patterns, drafting states, and approval flows against the mock calendar:
 
 ```bash
 cd backend
 python -m app.testing.testing_chat_regression
 ```
 
-Expected output: `Regression result: 8/8 passed`.
+```
+✅ remove checking -> DELETE_EVENT with one action
+✅ todays tasks -> GET_TODAY and no create/delete action
+✅ all tasks? -> GET_TODAY and not hijacked by stale draft
+✅ create with title only -> asks for time (no executable action yet)
+✅ then 9 pm -> creates pending CREATE action for draft title
+✅ no -> rejects pending actions
+✅ add yoga -> 8am -> pending CREATE action
+✅ yes -> applies the pending multi-turn CREATE (not 'nothing pending')
+---------------------------------
+Regression result: 8/8 passed
+```
 
-![Regression results](docs/graphs/regression_results.png)
+![Regression Results](docs/graphs/regression_results.png)
 
-To run individual agent tests:
+Run individual component test suites:
 ```bash
 python -m app.testing.testing_intend        # Intent classification test suite
 python -m app.testing.testing_entity        # Entity extraction test suite
-python -m app.testing.testing_conversation  # Conversational turn test suite
+python -m app.testing.testing_conversation  # Multi-turn conversation test suite
 ```
 
-Continuous integration runs automatically on every commit via GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+Continuous integration runs automatically on push/PR via [GitHub Actions](.github/workflows/ci.yml).
 
 ---
 
-## Deployment
+## Docker Deployment
 
-### Docker (Recommended)
-
-Run both the FastAPI backend and Streamlit frontend in orchestrated containers:
+Run both the FastAPI backend and Streamlit frontend via Docker Compose:
 
 ```bash
-# Using Groq
+# Launch with Groq
 GROQ_API_KEY=your_key DEMO_MODE=true docker compose up --build
 
-# Or using Anthropic
+# Or with Anthropic
 LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=your_key DEMO_MODE=true docker compose up --build
 ```
 
-- Backend runs at `http://localhost:8000`
-- Frontend runs at `http://localhost:8501`
-
-### Cloud Split Deployment
-
-- **Backend** (Render / Railway / Fly.io): Deploy `backend/` using `backend/Dockerfile`. Set `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`), `DEMO_MODE=true`, `API_KEY`, and `ALLOWED_ORIGINS=https://<your-frontend-domain>`.
-- **Frontend** (Streamlit Community Cloud): Deploy `frontend/app.py`. Under App Settings > Secrets, supply `API_URL=https://<your-backend-domain>` and matching `API_KEY`.
+- Backend API: `http://localhost:8000` (Health check at `/`)
+- Frontend UI: `http://localhost:8501`
 
 ---
 
-## Security & Guardrails
+## Connecting Real Google Calendar (`DEMO_MODE=false`)
 
-- **Constant-time Secret Auth**: Mutation endpoints enforce `X-API-Key` comparison using `secrets.compare_digest`.
-- **Output Sanitization & XSS Defense**: Dynamic calendar content is HTML-escaped before display, and assistant outputs are scrubbed for control characters and delimiter leakage.
-- **Fail-Closed Protection**: In non-demo environments (`DEMO_MODE=false`), the backend refuses to boot without `API_KEY` configured, preventing unauthenticated access to live Google Calendars.
-- **Payload Quotas**: Mutation endpoints limit requests to a maximum of 25 actions to guard against quota exhaustion.
+1. In the [Google Cloud Console](https://console.cloud.google.com/), enable the **Google Calendar API**.
+2. Create an **OAuth 2.0 Client ID** with Application type **Desktop app**.
+3. Download the credentials JSON and save as `backend/credentials.json`.
+4. Set `DEMO_MODE=false` and `ALLOW_INTERACTIVE_AUTH=true` in your `.env`.
+5. On initial launch, a browser window will open for one-time OAuth consent. An authorized `backend/token.json` is generated with `0600` permissions for subsequent headless runs.
 
 ---
 
-## Known Limits & Roadmap
+## Known Limitations & Production Roadmap
 
-- **Session Storage**: Current session state is file-backed and single-node; migrate to Redis for horizontally scaled multi-worker deployments.
-- **Multi-Tenancy**: The mock calendar demo is globally shared per container instance; production multi-tenant use requires per-user credential and token mapping.
-- **Python Runtime**: Tested on Python 3.9+. Upgrading to Python 3.10+ is recommended to avoid Google API core deprecation warnings.
+- **Session Store:** File-backed JSON session persistence is single-node. A production horizontal deployment should swap `session_memory.py` for Redis.
+- **Tenant Isolation:** In `DEMO_MODE=true`, mock state is container-global; production setups require mapping authenticated user identities to individual calendar service sessions.
+- **Python Target:** Google API client libraries issue EOL notices on Python 3.9; Python 3.10+ is recommended for production container deployments.
 
 ---
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+Distributed under the [MIT License](LICENSE).
