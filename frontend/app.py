@@ -46,7 +46,13 @@ def _ensure_backend():
     import urllib.parse
     import uvicorn
 
-    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "backend"))
+    cur_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.abspath(os.path.join(cur_dir, "..", "backend")),
+        os.path.abspath(os.path.join(cur_dir, "backend")),
+        os.path.abspath("backend"),
+    ]
+    backend_dir = next((c for c in candidates if os.path.isdir(os.path.join(c, "app"))), candidates[0])
     if backend_dir not in sys.path:
         sys.path.insert(0, backend_dir)
 
