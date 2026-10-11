@@ -1,9 +1,21 @@
 import html
 import os
+import sys
 import uuid
 import streamlit as st
 import requests
 from datetime import datetime
+
+# Guarantee backend directory is in sys.path before any imports
+cur_dir = os.path.dirname(os.path.abspath(__file__))
+for cand in [
+    os.path.abspath(os.path.join(cur_dir, "..", "backend")),
+    os.path.abspath(os.path.join(cur_dir, "backend")),
+    os.path.abspath("backend"),
+]:
+    if os.path.isdir(os.path.join(cand, "app")) and cand not in sys.path:
+        sys.path.insert(0, cand)
+        break
 
 def _get_api_url():
     if os.getenv("API_URL"):
@@ -30,71 +42,67 @@ DEMO_MODE = os.getenv("DEMO_MODE", "false").lower() == "true"
 
 
 def _ensure_backend():
-    """Auto-start embedded backend when running on localhost / single-container clouds (e.g. Streamlit Cloud)."""
+    """Auto-start embedded backend when running on localhost / single-container clouds (e.g. Streamlit Cloud).
+    Detects if an existing server is running an obsolete version and transparently switches to a fresh port.
+    """
+    global API_URL
     if "127.0.0.1" not in API_URL and "localhost" not in API_URL:
         return
+
+    # Check if the active API_URL has the current Google OAuth routes
     try:
-        r = requests.get(f"{API_URL}/", timeout=1)
-        if r.status_code == 200:
+        r = requests.get(f"{API_URL}/auth/google/status", timeout=1)
+        if r.status_code in (200, 401):
             return
     except Exception:
         pass
 
-    import sys
+    import socket
     import threading
     import time
-    import urllib.parse
     import uvicorn
 
-    cur_dir = os.path.dirname(os.path.abspath(__file__))
-    candidates = [
-        os.path.abspath(os.path.join(cur_dir, "..", "backend")),
-        os.path.abspath(os.path.join(cur_dir, "backend")),
-        os.path.abspath("backend"),
-    ]
-    backend_dir = next((c for c in candidates if os.path.isdir(os.path.join(c, "app"))), candidates[0])
-    if backend_dir not in sys.path:
-        sys.path.insert(0, backend_dir)
+    def is_port_in_use(p: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(("127.0.0.1", p)) == 0
+
+    target_port = 8000
+    # If 8000 is occupied by a stale container process returning 404, bump to 8001+
+    try:
+        r = requests.get("http://127.0.0.1:8000/auth/google/status", timeout=1)
+        if r.status_code in (200, 401):
+            API_URL = "http://127.0.0.1:8000"
+            return
+        elif r.status_code == 404:
+            target_port = 8001
+    except Exception:
+        pass
+
+    while is_port_in_use(target_port):
+        try:
+            r = requests.get(f"http://127.0.0.1:{target_port}/auth/google/status", timeout=1)
+            if r.status_code in (200, 401):
+                API_URL = f"http://127.0.0.1:{target_port}"
+                return
+        except Exception:
+            pass
+        target_port += 1
+
+    API_URL = f"http://127.0.0.1:{target_port}"
 
     try:
-        # Auto-detect Google token from Streamlit secrets or local file
-        has_token = False
-        try:
-            if "GOOGLE_TOKEN_JSON" in st.secrets:
-                os.environ["GOOGLE_TOKEN_JSON"] = st.secrets["GOOGLE_TOKEN_JSON"]
-                has_token = True
-            elif "GOOGLE_TOKEN" in st.secrets:
-                os.environ["GOOGLE_TOKEN_JSON"] = st.secrets["GOOGLE_TOKEN"]
-                has_token = True
-        except Exception:
-            pass
-
-        try:
-            from app.services.calendar_service import _find_token_file
-            if _find_token_file() or os.getenv("GOOGLE_TOKEN_JSON"):
-                has_token = True
-        except Exception:
-            pass
-
-        if has_token:
-            os.environ["DEMO_MODE"] = "false"
-        else:
-            os.environ.setdefault("DEMO_MODE", "true")
-
         from app.main import app as fastapi_app
-        parsed = urllib.parse.urlparse(API_URL)
-        port = parsed.port or 8000
 
         def _serve():
-            uvicorn.run(fastapi_app, host="127.0.0.1", port=port, log_level="warning")
+            uvicorn.run(fastapi_app, host="127.0.0.1", port=target_port, log_level="warning")
 
         t = threading.Thread(target=_serve, daemon=True)
         t.start()
-        for _ in range(25):
+        for _ in range(30):
             time.sleep(0.2)
             try:
-                r = requests.get(f"{API_URL}/", timeout=1)
-                if r.status_code == 200:
+                r = requests.get(f"{API_URL}/auth/google/status", timeout=1)
+                if r.status_code in (200, 401):
                     break
             except Exception:
                 pass
@@ -130,6 +138,16 @@ def get_redirect_uri():
 
 
 def fetch_google_auth_url(redirect_uri):
+    # 1. Direct in-process fast-path (instant, avoids any stale HTTP process on port 8000)
+    try:
+        from app.config.google_config import create_authorization_url
+        data = create_authorization_url(redirect_uri, st.session_state.session_id)
+        if data.get("auth_url"):
+            return data["auth_url"], None
+    except Exception as local_err:
+        pass
+
+    # 2. HTTP API fallback
     try:
         r = requests.get(
             f"{API_URL}/auth/google/url",
@@ -137,14 +155,27 @@ def fetch_google_auth_url(redirect_uri):
             headers=_AUTH_HEADERS,
             timeout=5,
         )
-        r.raise_for_status()
-        data = r.json()
-        return data.get("auth_url"), None
+        if r.status_code == 200:
+            return r.json().get("auth_url"), None
+        return None, f"Server returned {r.status_code}: {r.text}"
     except Exception as e:
         return None, str(e)
 
 
 def exchange_google_code(code, redirect_uri, state=None):
+    # 1. Direct in-process fast-path
+    try:
+        from app.config.google_config import exchange_authorization_code
+        from app.services.calendar_service import set_session_token
+        from app.orchestrator.context_builder import invalidate_event_cache
+        token_data = exchange_authorization_code(code, redirect_uri, st.session_state.session_id, state)
+        res = set_session_token(st.session_state.session_id, token_data)
+        invalidate_event_cache()
+        return {"status": "ok", "account": res.get("email")}, None
+    except Exception as local_err:
+        pass
+
+    # 2. HTTP API fallback
     try:
         payload = {
             "code": code,
@@ -159,15 +190,9 @@ def exchange_google_code(code, redirect_uri, state=None):
             headers=_AUTH_HEADERS,
             timeout=15,
         )
-        r.raise_for_status()
-        return r.json(), None
-    except requests.exceptions.HTTPError as e:
-        detail = "Google OAuth exchange failed."
-        try:
-            detail = e.response.json().get("detail", detail)
-        except Exception:
-            pass
-        return None, detail
+        if r.status_code == 200:
+            return r.json(), None
+        return None, f"Server returned {r.status_code}: {r.text}"
     except Exception as e:
         return None, str(e)
 
@@ -180,15 +205,17 @@ def connect_google_token(token_data):
             headers=_AUTH_HEADERS,
             timeout=10,
         )
-        r.raise_for_status()
-        return r.json(), None
-    except requests.exceptions.HTTPError as e:
-        detail = "Invalid token or expired credentials."
-        try:
-            detail = e.response.json().get("detail", detail)
-        except Exception:
-            pass
-        return None, detail
+        if r.status_code == 200:
+            return r.json(), None
+    except Exception:
+        pass
+
+    try:
+        from app.services.calendar_service import set_session_token
+        from app.orchestrator.context_builder import invalidate_event_cache
+        res = set_session_token(st.session_state.session_id, token_data)
+        invalidate_event_cache()
+        return {"status": "ok", "account": res.get("email")}, None
     except Exception as e:
         return None, str(e)
 
@@ -201,7 +228,17 @@ def disconnect_google():
             headers=_AUTH_HEADERS,
             timeout=10,
         )
-        return r.json()
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+
+    try:
+        from app.services.calendar_service import disconnect_session
+        from app.orchestrator.context_builder import invalidate_event_cache
+        disconnect_session(st.session_state.session_id)
+        invalidate_event_cache()
+        return {"status": "ok"}
     except Exception:
         return {}
 
