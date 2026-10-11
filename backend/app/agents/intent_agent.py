@@ -70,7 +70,21 @@ RULE_INTENTS = {
         "what's today",
         "plans today",
         "the plan",
-        "my day"
+        "my day",
+        "timing",
+        "timings",
+        "times",
+        "agenda",
+        "calendar",
+        "events",
+        "meetings",
+        "appointments",
+        "what do i have",
+        "what have i got",
+        "what's on",
+        "what is on",
+        "when is",
+        "what time"
     ],
 
     "OPTIMIZE_DAY": [

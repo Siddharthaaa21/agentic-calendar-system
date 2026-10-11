@@ -25,7 +25,7 @@ def format_schedule_summary(context):
 
     lines.append("Today's priorities:")
 
-    for e in events[:4]:
+    for e in events[:10]:
 
         lines.append(
             f"- **{e['title']}** — {pretty_time(e['start'])}"
