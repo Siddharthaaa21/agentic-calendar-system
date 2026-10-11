@@ -40,35 +40,34 @@ def draw_architecture(path: str):
 
 
 def draw_regression_chart(path: str):
-    # Simple bar chart showing 6/6 passing
-    w, h = 800, 400
+    # Simple bar chart showing 8/8 passing
+    w, h = 900, 400
     img = Image.new("RGB", (w, h), "white")
     d = ImageDraw.Draw(img)
     fw = ImageFont.load_default()
 
-    title = "Deterministic Regression"
-    d.text((20, 10), title, fill="black", font=fw)
+    title = "Deterministic Regression (CI Suite)"
+    d.text((20, 15), title, fill="black", font=fw)
 
-    labels = ["remove","today","all","create-title","then-9pm","no"]
-    values = [1,1,1,1,1,1]
+    labels = ["remove", "today", "all", "draft-title", "add-time", "reject", "multi-turn", "approve"]
+    values = [1, 1, 1, 1, 1, 1, 1, 1]
 
     maxv = max(values)
-    margin = 60
-    bar_w = 80
+    bar_w = 75
     gap = 20
-    start_x = 40
+    start_x = 35
     base_y = 320
 
     for i, (lab, val) in enumerate(zip(labels, values)):
         x = start_x + i * (bar_w + gap)
         hbar = int((val / maxv) * 200)
-        d.rectangle([x, base_y - hbar, x + bar_w, base_y], fill=(30,144,255))
+        d.rectangle([x, base_y - hbar, x + bar_w, base_y], fill=(30, 144, 255))
         bbox = d.textbbox((0, 0), lab, font=fw)
         tw = bbox[2] - bbox[0]
         d.text((x + (bar_w - tw) / 2, base_y + 8), lab, fill="black", font=fw)
 
     # annotate score
-    d.text((600, 60), "Passed: 6/6", fill="green", font=fw)
+    d.text((750, 25), "Passed: 8/8", fill="green", font=fw)
 
     img.save(path)
 

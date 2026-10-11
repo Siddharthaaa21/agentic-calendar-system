@@ -1,8 +1,14 @@
 # Axon — Agentic Calendar System
 
-A conversational agent that manages your Google Calendar in plain English. It understands intent, structures and prioritizes your day, detects conflicts, finds free slots, and proposes create / reschedule / delete actions — but **never touches your real calendar without explicit approval**, thanks to a human-in-the-loop (HITL) gate.
+[![CI](https://github.com/Siddharthaaa21/agentic-calendar-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Siddharthaaa21/agentic-calendar-system/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.128-green.svg)](https://fastapi.tiangolo.com)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.50-red.svg)](https://streamlit.io)
 
-Built with a **FastAPI** backend, a **Streamlit** frontend, and **Groq (Llama 3.1)** for LLM reasoning.
+A conversational AI assistant that manages your Google Calendar in plain English. It understands intent, structures and prioritizes your day, detects scheduling conflicts, finds deep-work focus slots, and proposes create / reschedule / delete actions — but **never touches your real calendar without explicit approval**, thanks to a human-in-the-loop (HITL) gate.
+
+Built with a **FastAPI** backend, a **Streamlit** frontend, and interchangeable LLM reasoning powered by **Groq (Llama 3.1)** or **Anthropic (Claude)** with robust hybrid rule fallbacks.
 
 > **Try it:** `"what's for today"` · `"show conflicts"` · `"free slots"` · `"move gym to 8pm"` · `"delete lunch"`
 
@@ -12,11 +18,12 @@ Built with a **FastAPI** backend, a **Streamlit** frontend, and **Groq (Llama 3.
 
 | Design choice | What it buys you |
 |---|---|
-| **HITL approval gate** (`/execute` queues, `/approve` applies) | The LLM can *propose* but never *commit*. Every mutation is shown to the user before it reaches the calendar — no silent, hallucinated edits. |
-| **Multi-agent pipeline** | Intent, entity, planning, prioritization, and execution are separate, testable agents instead of one mega-prompt — easier to debug and extend. |
-| **Optional API-key auth** | The mutation API is locked behind an `X-API-Key` header when `API_KEY` is set (constant-time compare), with a loud startup warning if it's left open. |
-| **Demo mode** | Swap Google Calendar for an in-memory mock — anyone can try the full chat → plan → approve → execute loop with zero setup. |
-| **Deterministic regression tests** | 6 end-to-end conversation cases run on every push via GitHub Actions, so behavior changes can't slip through silently. |
+| **HITL approval gate** (`/execute` queues, `/approve` applies) | The LLM can *propose* but never *commit*. Every mutation is presented to the user before it reaches the calendar — eliminating silent, hallucinated edits. |
+| **Multi-agent pipeline** | Intent detection, entity extraction, planning, prioritization, and execution are separate, testable agents instead of a fragile monolithic prompt. |
+| **Hybrid fallback resilience** | Deterministic regex rules and template formatters ensure schedule queries, conflicts, and approvals remain operable even during LLM provider rate limits or outages. |
+| **Optional API-key auth** | Mutation endpoints are secured behind an `X-API-Key` header with constant-time comparison, plus fail-closed startup warnings when running against live calendars. |
+| **Zero-setup demo mode** | Run against an in-memory mock calendar (`DEMO_MODE=true`) — anyone can test the full chat → plan → approve → execute loop with zero Google Cloud configuration. |
+| **Deterministic regression suite** | 8 end-to-end multi-turn conversation test cases run on every push via GitHub Actions to prevent regressions. |
 
 ---
 
@@ -33,7 +40,7 @@ User ↔ Streamlit (frontend/app.py)
    └────────┬─────────┘
             │
    ┌────────┴─────────┐
-   │      Agents       │  planner · prioritizer · execution (Groq LLM)
+   │      Agents       │  planner · prioritizer · execution (Groq / Anthropic)
    └────────┬─────────┘
             │
    ┌────────┴─────────┐
@@ -43,80 +50,136 @@ User ↔ Streamlit (frontend/app.py)
 
 ![Architecture](docs/graphs/architecture.png)
 
-**Layout**
-- `backend/` — FastAPI app: agents (intent, entity, planner, prioritizer, execution), orchestrator (router, workflow, context builder), memory, and tests.
-- `frontend/` — Streamlit UI for chat and approvals.
-- `tools/` — helper scripts (architecture/regression graph generation).
+For an in-depth walkthrough of data flow, state management, and guardrails, see the [Architecture Guide](docs/ARCHITECTURE.md).
+
+**Repository Layout**
+- `backend/` — FastAPI app: agents (intent, entity, planner, prioritizer, execution), orchestrator (router, workflow, context builder), memory stores, and test suites.
+- `frontend/` — Streamlit web interface with real-time schedule inspection, conflict highlighting, and approval cards.
+- `docs/` — Architecture documentation and visual workflows.
+- `tools/` — Helper utilities for asset and graph generation.
 
 ---
 
 ## Local Setup
 
-**1. Configure environment**
+### 1. Prerequisites & Environment
+
+Clone the repository and create a Python virtual environment:
+
+```bash
+git clone https://github.com/Siddharthaaa21/agentic-calendar-system.git
+cd agentic-calendar-system
+
+# Create and activate a virtual environment (Python 3.9+)
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r backend/requirements.txt
+```
+
+### 2. Configure Environment Variables
 
 ```bash
 cp .env.example .env
 ```
 
-Key variables:
-- `GROQ_API_KEY` — required; free key at https://console.groq.com
-- `DEMO_MODE=true` — run against the mock calendar (no Google setup)
-- `API_KEY` — set it to require an `X-API-Key` header on every endpoint (recommended for any non-local deployment)
-- `ALLOWED_ORIGINS` — comma-separated CORS allowlist (defaults to localhost)
+Key environment variables:
+- `LLM_PROVIDER` — `groq` or `anthropic` (default: `anthropic`)
+- `GROQ_API_KEY` — Required if using Groq (free at [console.groq.com](https://console.groq.com))
+- `ANTHROPIC_API_KEY` — Required if using Anthropic ([console.anthropic.com](https://console.anthropic.com))
+- `DEMO_MODE=true` — Run against the mock calendar (recommended for instant local testing without Google credentials)
+- `API_KEY` — Optional shared secret requiring an `X-API-Key` header on all mutation endpoints
+- `ALLOWED_ORIGINS` — Comma-separated CORS allowlist (defaults to `http://localhost:8501,http://127.0.0.1:8501`)
 
-**2. Real Google Calendar** (`DEMO_MODE=false`)
+### 3. Connect Real Google Calendar (Optional, `DEMO_MODE=false`)
 
-1. Create an OAuth client ID (Desktop app) in Google Cloud Console with the Calendar API enabled.
-2. Download it as `backend/credentials.json`.
-3. First run opens a browser to authorize; a `token.json` is saved for reuse.
+1. Create an OAuth 2.0 Client ID (Desktop Application) in the [Google Cloud Console](https://console.cloud.google.com/) with the **Google Calendar API** enabled.
+2. Download the client secret JSON file and save it as `backend/credentials.json`.
+3. Set `DEMO_MODE=false` and `ALLOW_INTERACTIVE_AUTH=true` in your `.env`.
+4. The first backend launch opens a browser to grant calendar permissions; an authorized `backend/token.json` is saved locally for future runs.
 
-This OAuth flow is interactive and local-only — it won't run on a headless cloud server. Use `DEMO_MODE=true` for cloud deployments.
+### 4. Run the Application
 
-**3. Run backend + frontend**
+In separate terminal windows with your virtual environment activated:
 
 ```bash
-source venv39/bin/activate
+# Terminal 1: Backend API → http://127.0.0.1:8000
+cd backend
+python -m uvicorn app.main:app --reload
 
-# backend → http://127.0.0.1:8000
-cd backend && python -m uvicorn app.main:app --reload --app-dir .
-
-# frontend → http://localhost:8501  (set API_URL to point elsewhere)
-cd frontend && python -m streamlit run app.py
+# Terminal 2: Frontend Web UI → http://localhost:8501
+cd frontend
+streamlit run app.py
 ```
 
 ---
 
-## Tests
+## Testing
+
+Run the deterministic regression suite (executes against the mock calendar, zero external credentials required):
 
 ```bash
-source venv39/bin/activate
 cd backend
 python -m app.testing.testing_chat_regression
 ```
 
-Expected: `Regression result: 6/6 passed`. The same suite runs on every push/PR via GitHub Actions (`.github/workflows/ci.yml`).
+Expected output: `Regression result: 8/8 passed`.
 
 ![Regression results](docs/graphs/regression_results.png)
+
+To run individual agent tests:
+```bash
+python -m app.testing.testing_intend        # Intent classification test suite
+python -m app.testing.testing_entity        # Entity extraction test suite
+python -m app.testing.testing_conversation  # Conversational turn test suite
+```
+
+Continuous integration runs automatically on every commit via GitHub Actions ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
 ---
 
 ## Deployment
 
-**Docker (any container host)**
+### Docker (Recommended)
+
+Run both the FastAPI backend and Streamlit frontend in orchestrated containers:
 
 ```bash
+# Using Groq
 GROQ_API_KEY=your_key DEMO_MODE=true docker compose up --build
+
+# Or using Anthropic
+LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=your_key DEMO_MODE=true docker compose up --build
 ```
 
-Backend on `:8000`, frontend on `:8501`.
+- Backend runs at `http://localhost:8000`
+- Frontend runs at `http://localhost:8501`
 
-**Cloud (recommended split)**
-- **Backend** → Render / Railway / Fly.io: deploy `backend/` (or its `Dockerfile`); set `GROQ_API_KEY`, `DEMO_MODE`, `API_KEY`, and `ALLOWED_ORIGINS=https://<your-frontend-domain>`.
-- **Frontend** → Streamlit Community Cloud: deploy `frontend/app.py`; set the `API_URL` secret (and matching `X-API-Key`) to your backend.
+### Cloud Split Deployment
+
+- **Backend** (Render / Railway / Fly.io): Deploy `backend/` using `backend/Dockerfile`. Set `GROQ_API_KEY` (or `ANTHROPIC_API_KEY`), `DEMO_MODE=true`, `API_KEY`, and `ALLOWED_ORIGINS=https://<your-frontend-domain>`.
+- **Frontend** (Streamlit Community Cloud): Deploy `frontend/app.py`. Under App Settings > Secrets, supply `API_URL=https://<your-backend-domain>` and matching `API_KEY`.
 
 ---
 
-## Known limits
-- Session memory is file-backed — migrate to Redis for multi-instance deployments.
-- Demo state is in-memory and shared across all visitors by design (fine for a portfolio demo, not multi-tenant use).
-- Targets Python 3.9 (`venv39`); Google libraries warn about 3.9 EOL — upgrading to 3.10+ is recommended.
+## Security & Guardrails
+
+- **Constant-time Secret Auth**: Mutation endpoints enforce `X-API-Key` comparison using `secrets.compare_digest`.
+- **Output Sanitization & XSS Defense**: Dynamic calendar content is HTML-escaped before display, and assistant outputs are scrubbed for control characters and delimiter leakage.
+- **Fail-Closed Protection**: In non-demo environments (`DEMO_MODE=false`), the backend refuses to boot without `API_KEY` configured, preventing unauthenticated access to live Google Calendars.
+- **Payload Quotas**: Mutation endpoints limit requests to a maximum of 25 actions to guard against quota exhaustion.
+
+---
+
+## Known Limits & Roadmap
+
+- **Session Storage**: Current session state is file-backed and single-node; migrate to Redis for horizontally scaled multi-worker deployments.
+- **Multi-Tenancy**: The mock calendar demo is globally shared per container instance; production multi-tenant use requires per-user credential and token mapping.
+- **Python Runtime**: Tested on Python 3.9+. Upgrading to Python 3.10+ is recommended to avoid Google API core deprecation warnings.
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

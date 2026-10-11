@@ -8,7 +8,10 @@
 
 # Secrets & local env (NEVER bake these into an image)
 .env
+.env.*
 .env.local
+backend/.env
+backend/.env.*
 backend/credentials.json
 backend/token.json
 backend/session.json
