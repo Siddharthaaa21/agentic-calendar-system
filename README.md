@@ -215,13 +215,27 @@ LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=your_key DEMO_MODE=true docker compose 
 
 ---
 
-## Connecting Real Google Calendar (`DEMO_MODE=false`)
+## Connecting Real Google Calendar & Live Multi-User Access
 
-1. In the [Google Cloud Console](https://console.cloud.google.com/), enable the **Google Calendar API**.
-2. Create an **OAuth 2.0 Client ID** with Application type **Desktop app**.
-3. Download the credentials JSON and save as `backend/credentials.json`.
-4. Set `DEMO_MODE=false` and `ALLOW_INTERACTIVE_AUTH=true` in your `.env`.
-5. On initial launch, a browser window will open for one-time OAuth consent. An authorized `backend/token.json` is generated with `0600` permissions for subsequent headless runs.
+Axon supports **multi-tenant, one-click Web OAuth** so any visitor accessing the deployment can sign in with their own Google account and manage their personal calendar in complete isolation.
+
+### 1. Web OAuth Flow (Any Visitor)
+- Visitors arriving at the deployed application (e.g. `https://axon-calender.streamlit.app`) start in **Sample Demo Sandbox** mode.
+- Clicking **"🚀 Sign in with Google Calendar"** directs them to Google's official consent screen.
+- Upon consent, Google redirects back with an authorization code (`?code=...`).
+- Axon automatically exchanges the code, binds the OAuth tokens to that visitor's unique session ID, and renders their real schedule, timings, and conflicts.
+- **Tenant Isolation:** Visitor A's calendar data and actions are strictly isolated from Visitor B. Sessions never share credentials.
+- Users can click **Disconnect** at any point to clear tokens and return to the sandbox.
+
+### 2. Google Cloud Console Setup (Deployment)
+1. Go to the [Google Cloud Console Credentials page](https://console.cloud.google.com/apis/credentials).
+2. Under your OAuth 2.0 Client ID, add the following to **Authorized redirect URIs**:
+   - `https://axon-calender.streamlit.app` (for Streamlit Cloud production)
+   - `http://localhost:8501` (for local development)
+3. Under **OAuth consent screen**:
+   - Ensure the Google Calendar scope (`https://www.googleapis.com/auth/calendar`) is added.
+   - If the app is in *Testing* mode, add your Google email under **Test users**; or set the app to *Production* (External).
+4. Save your client credentials in `backend/credentials.json` or configure `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` in Streamlit Secrets.
 
 ---
 
