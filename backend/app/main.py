@@ -1,7 +1,7 @@
 import logging
 import os
 import secrets
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Security
 from fastapi.middleware.cors import CORSMiddleware
@@ -83,6 +83,13 @@ class ConnectGoogleRequest(BaseModel):
     session_id: str = "default"
 
 
+class GoogleCallbackRequest(BaseModel):
+    code: str
+    redirect_uri: str
+    session_id: str = "default"
+    state: Optional[str] = None
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/")
@@ -91,6 +98,38 @@ def health():
 
 
 # ── Google Auth & Connection Endpoints ────────────────────────────────────────
+
+@app.get("/auth/google/url", dependencies=[Depends(require_api_key)])
+def google_auth_url(redirect_uri: str, session_id: str = "default"):
+    """Generate a one-click Google OAuth URL for web authentication."""
+    from app.config.google_config import create_authorization_url
+    try:
+        data = create_authorization_url(redirect_uri=redirect_uri, session_id=session_id)
+        return {"status": "ok", **data}
+    except Exception as e:
+        logger.warning("Could not generate Google auth URL: %s", e)
+        return {"status": "error", "auth_url": None, "detail": str(e)}
+
+
+@app.post("/auth/google/callback", dependencies=[Depends(require_api_key)])
+def google_callback(payload: GoogleCallbackRequest):
+    """Exchange authorization code from Google redirect for access tokens."""
+    set_session(payload.session_id)
+    from app.config.google_config import exchange_authorization_code
+    try:
+        token_data = exchange_authorization_code(
+            code=payload.code,
+            redirect_uri=payload.redirect_uri,
+            session_id=payload.session_id,
+            state=payload.state,
+        )
+        res = set_session_token(payload.session_id, token_data)
+        invalidate_event_cache()
+        return {"status": "ok", "account": res.get("email"), "session_id": payload.session_id}
+    except Exception as e:
+        logger.exception("Failed exchanging Google auth code: %s", e)
+        raise HTTPException(status_code=400, detail=f"Google OAuth exchange failed: {str(e)}")
+
 
 @app.get("/auth/google/status", dependencies=[Depends(require_api_key)])
 def google_status(session_id: str = "default"):

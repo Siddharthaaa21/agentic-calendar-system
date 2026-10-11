@@ -109,6 +109,69 @@ _API_KEY = _get_api_key()
 _AUTH_HEADERS = {"X-API-Key": _API_KEY} if _API_KEY else {}
 
 
+def get_redirect_uri():
+    if os.getenv("REDIRECT_URI"):
+        return os.getenv("REDIRECT_URI").rstrip("/")
+    try:
+        if "REDIRECT_URI" in st.secrets:
+            return str(st.secrets["REDIRECT_URI"]).rstrip("/")
+    except Exception:
+        pass
+    # If deployed on Streamlit Cloud or remote server, default to production app URL
+    if (
+        os.path.exists("/mount/src")
+        or "axon-calender" in os.getenv("HOSTNAME", "")
+        or "axon-calender" in os.getenv("STREAMLIT_SERVER_BASE_URL", "")
+        or not ("127.0.0.1" in API_URL or "localhost" in API_URL)
+    ):
+        return "https://axon-calender.streamlit.app"
+    # Local fallback
+    return "http://localhost:8501"
+
+
+def fetch_google_auth_url(redirect_uri):
+    try:
+        r = requests.get(
+            f"{API_URL}/auth/google/url",
+            params={"redirect_uri": redirect_uri, "session_id": st.session_state.session_id},
+            headers=_AUTH_HEADERS,
+            timeout=5,
+        )
+        r.raise_for_status()
+        data = r.json()
+        return data.get("auth_url"), None
+    except Exception as e:
+        return None, str(e)
+
+
+def exchange_google_code(code, redirect_uri, state=None):
+    try:
+        payload = {
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "session_id": st.session_state.session_id,
+        }
+        if state:
+            payload["state"] = state
+        r = requests.post(
+            f"{API_URL}/auth/google/callback",
+            json=payload,
+            headers=_AUTH_HEADERS,
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json(), None
+    except requests.exceptions.HTTPError as e:
+        detail = "Google OAuth exchange failed."
+        try:
+            detail = e.response.json().get("detail", detail)
+        except Exception:
+            pass
+        return None, detail
+    except Exception as e:
+        return None, str(e)
+
+
 def connect_google_token(token_data):
     try:
         r = requests.post(
@@ -733,6 +796,37 @@ for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+# ── Handle Google OAuth Redirect Callback ──
+auth_code = st.query_params.get("code")
+auth_state = st.query_params.get("state")
+auth_error = st.query_params.get("error")
+
+if auth_error:
+    st.error(f"Google sign-in was cancelled or encountered an error: {auth_error}")
+    st.query_params.clear()
+elif auth_code:
+    if auth_state and "__" in auth_state:
+        orig_session = auth_state.split("__")[0]
+        if orig_session:
+            st.session_state.session_id = orig_session
+
+    redirect_uri = get_redirect_uri()
+    with st.spinner("Authorizing with Google Calendar..."):
+        res, err = exchange_google_code(auth_code, redirect_uri, state=auth_state)
+
+    st.query_params.clear()
+
+    if err:
+        st.session_state.error = f"Google Sign-In failed: {err}"
+    else:
+        account = res.get("account", "Google Calendar")
+        st.session_state.oauth_success = f"Successfully connected to {account}!"
+        st.session_state.data = None
+        refreshed, _ = fetch_schedule()
+        if refreshed:
+            st.session_state.data = refreshed
+        st.rerun()
+
 # Auto-load calendar once
 if st.session_state.data is None:
     with st.spinner("Connecting to calendar service..."):
@@ -771,6 +865,9 @@ st.markdown(f"""
     <div class="hdr-right">{datetime.now().strftime('%a %d %b · %I:%M %p')}</div>
 </div>
 """, unsafe_allow_html=True)
+
+if "oauth_success" in st.session_state:
+    st.success(st.session_state.pop("oauth_success"))
 
 # ─────────────────────────────────────────
 #  ARCHITECTURE PIPELINE TELEMETRY STRIP
@@ -982,17 +1079,36 @@ with right:
 
         # ── Google Calendar Connection Control ──
         if not is_live:
+            redirect_uri = get_redirect_uri()
+            auth_url, auth_err = fetch_google_auth_url(redirect_uri)
+
             st.markdown("""
-            <div class="card" style="border-color: rgba(59,130,246,0.35); background: linear-gradient(180deg, rgba(59,130,246,0.08), var(--surface));">
-                <div class="card-label"><span>🔑</span> Connect Real Google Calendar</div>
-                <div style="font-size:12px;color:var(--text);margin-bottom:6px;line-height:1.5;">
-                    Currently in <strong>Sample Demo Mode</strong>. Connect your Google account to fetch your live schedule, detect real conflicts, and stage updates to your actual calendar.
+            <div class="card" style="border-color: rgba(66,133,244,0.4); background: linear-gradient(180deg, rgba(66,133,244,0.08), var(--surface));">
+                <div class="card-label" style="display:flex;align-items:center;gap:8px;">
+                    <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+                    <span>Connect Your Personal Google Calendar</span>
+                </div>
+                <div style="font-size:12px;color:var(--text);margin-bottom:8px;line-height:1.5;">
+                    Currently viewing the <strong>Sample Sandbox</strong>. Click below to sign in with your Google account — your real schedule timings, conflicts, and events will load automatically.
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:2px;">
+                    🔒 <strong>Privacy:</strong> Each visitor receives an isolated browser session. Your calendar data remains completely private to you.
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-            with st.expander("👉 Click here to Connect / Sign in with Google", expanded=False):
-                t1, t2 = st.tabs(["⚡ Connect Token", "☁️ Streamlit Cloud Secrets"])
+            if auth_url:
+                st.link_button(
+                    "🚀 Sign in with Google Calendar",
+                    auth_url,
+                    type="primary",
+                    use_container_width=True,
+                )
+            else:
+                st.info(f"OAuth URL note: {auth_err or 'Ready for direct connection below'}")
+
+            with st.expander("⚙️ Alternative & Advanced Connection Options", expanded=False):
+                t1, t2, t3 = st.tabs(["⚡ Paste/Upload Token", "☁️ Streamlit Secrets", "🛠️ Google Cloud Setup"])
                 with t1:
                     st.caption("Paste your Google token JSON or upload your `token.json` file:")
                     token_input = st.text_area(
@@ -1038,16 +1154,24 @@ with right:
 
                 with t2:
                     st.markdown("""
-                    **Permanent Cloud Connection (Streamlit Cloud):**
+                    **Permanent Cloud Secrets (Streamlit Cloud):**
                     1. Go to your **Streamlit Cloud Dashboard**.
                     2. Click **App settings** ➔ **Secrets**.
-                    3. Paste your token JSON and click **Save**:
+                    3. Add your Google OAuth credentials or token:
                     ```toml
                     GOOGLE_TOKEN = '''
                     <paste token.json content here>
                     '''
                     ```
-                    Your app will stay permanently synced across all container restarts.
+                    """)
+
+                with t3:
+                    st.markdown(f"""
+                    **Google Cloud Console Setup:**
+                    1. In [Google Cloud Console Credentials](https://console.cloud.google.com/apis/credentials), add these **Authorized redirect URIs**:
+                       - `https://axon-calender.streamlit.app` (production deployment)
+                       - `http://localhost:8501` (local testing)
+                    2. Under **OAuth consent screen**, make sure the app status is set to *External* with your email added under *Test users*, or *In production*.
                     """)
         else:
             col_acc1, col_acc2 = st.columns([3, 1])
@@ -1062,6 +1186,7 @@ with right:
             with col_acc2:
                 if st.button("Disconnect", key="disc_btn"):
                     disconnect_google()
+                    st.session_state.data = None
                     refreshed, _ = fetch_schedule()
                     if refreshed:
                         st.session_state.data = refreshed

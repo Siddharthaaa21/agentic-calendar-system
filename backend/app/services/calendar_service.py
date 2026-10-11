@@ -58,7 +58,7 @@ def get_credentials(session_id: Optional[str] = None) -> Optional[Credentials]:
     """Resolve valid, refreshed Google OAuth credentials for the active session or server."""
     sess = session_id or current_session()
 
-    # 1. Per-session token
+    # 1. Per-session token (User authenticated via Web OAuth or uploaded token)
     if sess and sess in _session_tokens:
         info = _session_tokens[sess]
         creds = info.get("creds")
@@ -71,7 +71,14 @@ def get_credentials(session_id: Optional[str] = None) -> Optional[Credentials]:
             if creds.valid:
                 return creds
 
-    # 2. Environment variable GOOGLE_TOKEN_JSON
+    # In multi-tenant web deployment, isolate sessions so visitor sessions don't inherit
+    # a server token unless explicitly permitted or in default/single-user mode.
+    allow_server_token = os.getenv("ALLOW_SERVER_TOKEN", "false").lower() == "true"
+    if sess and sess != "default" and not allow_server_token:
+        # Isolated visitor session has not signed in yet
+        return None
+
+    # 2. Environment variable GOOGLE_TOKEN_JSON (single-user / default session)
     raw_env_json = os.getenv("GOOGLE_TOKEN_JSON") or os.getenv("GOOGLE_TOKEN")
     if raw_env_json:
         try:
@@ -134,23 +141,52 @@ def get_connected_account(session_id: Optional[str] = None) -> Optional[str]:
         return "Connected Google Account"
 
 
-def set_session_token(session_id: str, token_data: Union[dict, str]) -> Dict[str, Any]:
+def set_session_token(session_id: str, token_data: Union[dict, str, Credentials]) -> Dict[str, Any]:
     """Bind a user's Google OAuth token to their specific browser session."""
-    if isinstance(token_data, str):
-        token_data = json.loads(token_data)
+    if isinstance(token_data, Credentials) or (hasattr(token_data, "valid") and hasattr(token_data, "refresh_token")):
+        creds = token_data
+        token_dict = json.loads(creds.to_json()) if hasattr(creds, "to_json") else {}
+    else:
+        if isinstance(token_data, str):
+            token_dict = json.loads(token_data)
+        else:
+            token_dict = dict(token_data)
 
-    creds = Credentials.from_authorized_user_info(token_data, SCOPES)
+        # Normalize access_token -> token for google.oauth2.credentials.Credentials
+        if "access_token" in token_dict and "token" not in token_dict:
+            token_dict["token"] = token_dict["access_token"]
+
+        # Backfill client info if missing
+        try:
+            from app.config.google_config import get_google_client_config
+            cfg = get_google_client_config()
+            if cfg:
+                token_dict.setdefault("client_id", cfg.get("client_id"))
+                token_dict.setdefault("client_secret", cfg.get("client_secret"))
+                token_dict.setdefault("token_uri", cfg.get("token_uri", "https://oauth2.googleapis.com/token"))
+        except Exception:
+            pass
+
+        creds = Credentials.from_authorized_user_info(token_dict, SCOPES)
+
     if not creds.valid and creds.expired and creds.refresh_token:
-        creds.refresh(Request())
+        try:
+            creds.refresh(Request())
+        except Exception as e:
+            logger.warning("Failed refreshing session creds: %s", e)
 
-    service = build("calendar", "v3", credentials=creds)
-    cal = service.calendarList().get(calendarId="primary").execute()
-    email = cal.get("id") or cal.get("summary") or "Primary Calendar"
+    email = "Connected Google Account"
+    try:
+        service = build("calendar", "v3", credentials=creds)
+        cal = service.calendarList().get(calendarId="primary").execute()
+        email = cal.get("id") or cal.get("summary") or email
+    except Exception as e:
+        logger.warning("Could not fetch calendar account identity during connection: %s", e)
 
     _session_tokens[session_id] = {
         "creds": creds,
         "email": email,
-        "token_data": token_data,
+        "token_data": token_dict if not isinstance(token_data, Credentials) else {},
     }
     _session_demo_overrides[session_id] = False
     return {"status": "ok", "email": email}
